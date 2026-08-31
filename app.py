@@ -1,10 +1,8 @@
-# KEVO - Investor Liquidity Marketplace
+from fastapi import FastAPI
 
-from flask import Flask
-app = Flask(__name__)
+app = FastAPI(title="KEVO API")
 
-@app.route("/")
+
+@app.get("/")
 def home():
-    return "<h1>Welcome to King's Cloud Dashboard</h1>"
-app.run()
-
+    return {"message": "Welcome to KEVO API"}
