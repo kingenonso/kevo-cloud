@@ -182,6 +182,21 @@ def create_transaction(
             detail="Listing not found"
         )
 
+    seller = db.query(UserModel).filter(
+        UserModel.id == listing.seller_id
+    ).first()
+
+    if seller is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Seller not found"
+        )
+
+    if seller.role != "seller":
+        raise HTTPException(
+            status_code=400,
+            detail="User is not a seller"
+        )
     buyer = db.query(UserModel).filter(
         UserModel.id == transaction.buyer_id
     ).first()
@@ -197,7 +212,16 @@ def create_transaction(
             status_code=400,
             detail="User is not a buyer"
         )
-
+    if buyer.id == seller.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Buyer and seller cannot be the same user"
+        )
+    if transaction.agreed_price <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Agreed price must be greater than zero"
+        )
     if transaction.quantity > listing.quantity:
         raise HTTPException(
             status_code=400,
@@ -515,6 +539,20 @@ def update_transaction_status(
             detail="Invalid transaction status"
         )
 
+    allowed_transitions = {
+        "interested": ["accepted", "rejected", "cancelled"],
+        "accepted": ["settlement_pending", "cancelled"],
+        "settlement_pending": ["completed", "cancelled"],
+        "completed": [],
+        "rejected": [],
+        "cancelled": []
+    }
+
+    if status not in allowed_transitions[transaction.status]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot change transaction status from {transaction.status} to {status}"
+        )
     transaction.status = status
 
     db.commit()
