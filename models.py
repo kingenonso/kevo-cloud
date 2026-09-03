@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Numeric, ForeignKey
+from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, Boolean, Date
 from sqlalchemy.orm import declarative_base, relationship
 
 
@@ -12,6 +12,9 @@ class User(Base):
     name = Column(String(255), nullable=False)
     email = Column(String(255), unique=True, nullable=False)
     role = Column(String(50), nullable=False, default="seller")
+    kyc_status = Column(String(50), nullable=False, default="not_started")
+    jurisdiction = Column(String(100), nullable=True)
+    seller_affiliate_status = Column(String(50), nullable=True)
 
     listings = relationship("Listing", back_populates="seller")
 
@@ -25,6 +28,10 @@ class Listing(Base):
     asset_type = Column(String(100), nullable=False)
     quantity = Column(Integer, nullable=False)
     asking_price = Column(Numeric(15, 2), nullable=False)
+    is_transferable = Column(Boolean, nullable=False, default=False)
+    issuer_jurisdiction = Column(String(100), nullable=True)
+    issuer_reporting_status = Column(String(50), nullable=True)
+    issuer_current_information_available = Column(Boolean, nullable=True)
 
     seller = relationship("User", back_populates="listings")
 
@@ -37,7 +44,8 @@ class OwnershipRecord(Base):
     company = Column(String(255), nullable=False)
     asset_type = Column(String(100), nullable=False)
     quantity = Column(Integer, nullable=False)
-    verification_status = Column(   
+    acquisition_date = Column(Date, nullable=True)
+    verification_status = Column(
         String(50),
         nullable=False,
         default="pending"
@@ -116,3 +124,111 @@ class BuyerInterest(Base):
         nullable=False,
         default="active"
     )    
+class InvestorEligibility(Base):
+    __tablename__ = "investor_eligibility"
+
+    id = Column(Integer, primary_key=True)
+
+    buyer_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False
+    )
+
+    investor_type = Column(
+        String(100),
+        nullable=False
+    )
+
+    classification = Column(
+        String(150),
+        nullable=False
+    )
+
+    status = Column(
+        String(50),
+        nullable=False,
+        default="pending"
+    )
+
+    verification_method = Column(
+        String(150),
+        nullable=True
+    )
+
+    evidence_reference = Column(
+        String(255),
+        nullable=True
+    )
+
+    effective_date = Column(
+        Date,
+        nullable=True
+    )
+
+    review_date = Column(
+        Date,
+        nullable=True
+    )
+
+    jurisdiction = Column(
+        String(100),
+        nullable=True
+    )
+class ComplianceRule(Base):
+    __tablename__ = "compliance_rules"
+
+    id = Column(Integer, primary_key=True)
+
+    buyer_jurisdiction = Column(
+        String(100),
+        nullable=True
+    )
+
+    issuer_jurisdiction = Column(
+        String(100),
+        nullable=True
+    )
+
+    asset_type = Column(
+        String(100),
+        nullable=True
+    )
+
+    investor_classification = Column(
+        String(150),
+        nullable=True
+    )
+
+    rule_code = Column(
+        String(100),
+        nullable=False,
+        unique=True
+    )
+
+    description = Column(
+        String(500),
+        nullable=False
+    )
+
+    decision = Column(
+        String(50),
+        nullable=False
+    )
+
+    requires_human_review = Column(
+        Boolean,
+        nullable=False,
+        default=True
+    )
+
+    active = Column(
+        Boolean,
+        nullable=False,
+        default=True
+    )
+
+    source_reference = Column(
+        String(500),
+        nullable=True
+    )
