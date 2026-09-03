@@ -77,12 +77,13 @@ def check_compliance(buyer, listing, db):
         InvestorEligibility.buyer_id == buyer.id
     ).first()
     ownership = db.query(OwnershipRecord).filter(
-    OwnershipRecord.listing_id == listing.id,
-    OwnershipRecord.seller_id == listing.seller_id
-).first()
+        OwnershipRecord.listing_id == listing.id,
+        OwnershipRecord.seller_id == listing.seller_id,
+        OwnershipRecord.verification_status == "verified"
+    ).first()
     seller = db.query(UserModel).filter(
-    UserModel.id == listing.seller_id
-).first()
+        UserModel.id == listing.seller_id
+    ).first()
 
     checks = {
         "kyc_verified": buyer.kyc_status == "verified",
