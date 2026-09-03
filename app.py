@@ -91,6 +91,8 @@ def check_compliance(buyer, listing, db):
         "ownership_record_exists": ownership is not None,
         "issuer_reporting_status_present": listing.issuer_reporting_status is not None,
         "issuer_reporting_status": listing.issuer_reporting_status,
+        "issuer_current_information_available": listing.issuer_current_information_available,
+        "issuer_current_information_available_present": listing.issuer_current_information_available is not None,
         "seller_affiliate_status_present": (
             seller is not None
             and seller.seller_affiliate_status is not None
@@ -131,6 +133,8 @@ def check_compliance(buyer, listing, db):
         reasons.append("Ownership record is missing for regulatory review")
     if checks["ownership_record_exists"] and not checks["acquisition_date_present"]:
         reasons.append("Ownership acquisition date is missing for regulatory review")
+    if not checks["issuer_current_information_available_present"]:
+        reasons.append("Current issuer information availability is missing for regulatory review")
     if not checks["issuer_reporting_status_present"]:
         reasons.append("Issuer reporting status is missing for regulatory review")
     if not checks["seller_affiliate_status_present"]:
@@ -220,7 +224,26 @@ def find_applicable_rules(buyer, listing, db):
 
     return applicable_rules
 
+def evaluate_compliance_rules(buyer, listing, db):
+    rules = find_applicable_rules(
+        buyer,
+        listing,
+        db
+    )
 
+    evaluations = []
+
+    for rule in rules:
+        evaluations.append({
+            "rule_id": rule.id,
+            "rule_code": rule.rule_code,
+            "decision": rule.decision,
+            "requires_human_review": rule.requires_human_review,
+            "source_reference": rule.source_reference
+        })
+
+    return evaluations
+    
 @app.get("/")
 def home():
     return {"message": "Welcome to KEVO API"}
@@ -264,7 +287,7 @@ def get_applicable_compliance_rules(
             detail="Listing not found"
         )
 
-    rules = find_applicable_rules(
+    evaluations = evaluate_compliance_rules(
         buyer,
         listing,
         db
@@ -273,17 +296,8 @@ def get_applicable_compliance_rules(
     return {
         "buyer_id": buyer.id,
         "listing_id": listing.id,
-        "applicable_rules": [
-            {
-                "id": rule.id,
-                "rule_code": rule.rule_code,
-                "description": rule.description,
-                "decision": rule.decision,
-                "requires_human_review": rule.requires_human_review,
-                "source_reference": rule.source_reference
-            }
-            for rule in rules
-        ]
+        "evaluated_rules": evaluations
+ 
     }
 
 @app.post("/users")
@@ -552,7 +566,8 @@ def create_listing(
         asset_type=listing.asset_type,
         quantity=listing.quantity,
         asking_price=listing.asking_price,
-        issuer_reporting_status=listing.issuer_reporting_status
+        issuer_reporting_status=listing.issuer_reporting_status,
+        issuer_current_information_available=listing.issuer_current_information_available
     )
 
     db.add(new_listing)
@@ -568,7 +583,8 @@ def create_listing(
             "asset_type": new_listing.asset_type,
             "quantity": new_listing.quantity,
             "asking_price": float(new_listing.asking_price),
-            "issuer_reporting_status": new_listing.issuer_reporting_status
+            "issuer_reporting_status": new_listing.issuer_reporting_status,
+            "issuer_current_information_available": new_listing.issuer_current_information_available
         }
     }
 
@@ -1006,6 +1022,13 @@ def find_matches(
     for listing in matches:
         compliance = check_compliance(buyer, listing, db)
 
+        if compliance["status"] == "blocked":
+            match_status = "blocked"
+        elif compliance["status"] == "review":
+            match_status = "review"
+        else:
+            match_status = "eligible"
+
         compliance_results.append({
             "listing_id": listing.id,
             "seller_id": listing.seller_id,
@@ -1015,7 +1038,8 @@ def find_matches(
             "asking_price": float(listing.asking_price),
             "compliance_status": compliance["status"],
             "compliance_reasons": compliance["reasons"],
-            "compliance_checks": compliance["checks"]
+            "compliance_checks": compliance["checks"],
+            "match_status": match_status
         })
     return {
         "buyer_interest_id": interest.id,
