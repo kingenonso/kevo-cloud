@@ -986,8 +986,6 @@ def get_compliance_rules(
 
 
 @app.get("/buyer-interests/{interest_id}/matches")
-
-@app.get("/buyer-interests/{interest_id}/matches")
 def find_matches(
     interest_id: int,
     db: Session = Depends(get_db)
