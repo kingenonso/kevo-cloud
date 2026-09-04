@@ -283,6 +283,12 @@ def evaluate_transferability(listing, db):
     path_to_eligibility = None
     forecast_date = None
 
+    estate_fact = db.query(TransferabilityFact).filter(
+        TransferabilityFact.listing_id == listing.id,
+        TransferabilityFact.fact_type == "holder_deceased_estate_distribution",
+        TransferabilityFact.verification_status == "verified"
+    ).first()
+
     for rule in rules:
         fact = db.query(TransferabilityFact).filter(
             TransferabilityFact.listing_id == listing.id,
@@ -300,6 +306,12 @@ def evaluate_transferability(listing, db):
             statuses.append("review")
             reasons.append(
                 "Fact '" + rule.fact_type + "' for rule " + rule.rule_code + " is not yet verified"
+            )
+            continue
+
+        if estate_fact is not None and rule.jurisdiction == "United States":
+            reasons.append(
+                "Rule " + rule.rule_code + " holding period does not apply — SEC Rule 144(d)(3)(vii) estate exemption applies to a verified estate distribution"
             )
             continue
 
@@ -346,7 +358,7 @@ def evaluate_transferability(listing, db):
         "applicable_rule_count": len(rules),
         "path_to_eligibility": path_to_eligibility,
         "forecast_date": forecast_date
-    }    
+    }
 @app.get("/")
 def home():
     return {"message": "Welcome to KEVO API"}
