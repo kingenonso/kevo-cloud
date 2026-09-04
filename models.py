@@ -232,3 +232,59 @@ class ComplianceRule(Base):
         String(500),
         nullable=True
     )
+    
+class Evidence(Base):
+    __tablename__ = "evidence"
+
+    id = Column(Integer, primary_key=True)
+    listing_id = Column(Integer, ForeignKey("listings.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)
+    ownership_record_id = Column(Integer, ForeignKey("ownership_records.id"), nullable=True)
+    evidence_type = Column(String(100), nullable=False)
+    description = Column(String(500), nullable=False)
+    file_reference = Column(String(500), nullable=True)
+    verification_status = Column(String(50), nullable=False, default="pending")
+    source_reference = Column(String(500), nullable=True)
+
+class TransferabilityFact(Base):
+    __tablename__ = "transferability_facts"
+
+    id = Column(Integer, primary_key=True)
+    listing_id = Column(Integer, ForeignKey("listings.id"), nullable=True)
+    ownership_record_id = Column(Integer, ForeignKey("ownership_records.id"), nullable=True)
+    evidence_id = Column(Integer, ForeignKey("evidence.id"), nullable=True)
+    jurisdiction = Column(String(100), nullable=False)
+    fact_type = Column(String(100), nullable=False)
+    fact_value = Column(String(500), nullable=False)
+    as_of_date = Column(Date, nullable=True)
+    verification_status = Column(String(50), nullable=False, default="pending")
+    source_reference = Column(String(500), nullable=True)
+
+class TransferabilityRule(Base):
+    __tablename__ = "transferability_rules"
+
+    id = Column(Integer, primary_key=True)
+    jurisdiction = Column(String(100), nullable=False)
+    asset_type = Column(String(100), nullable=False)
+    fact_type = Column(String(100), nullable=False)
+    rule_code = Column(String(100), nullable=False, unique=True)
+    requirement = Column(String(500), nullable=False)
+    decision_if_unmet = Column(String(50), nullable=False)
+    requires_human_review = Column(Boolean, nullable=False, default=True)
+    active = Column(Boolean, nullable=False, default=True)
+    last_verified_date = Column(Date, nullable=True)
+    review_by = Column(Date, nullable=True)
+    source_reference = Column(String(500), nullable=True)
+    
+class TransferabilityAssessment(Base):
+    __tablename__ = "transferability_assessments"
+
+    id = Column(Integer, primary_key=True)
+    listing_id = Column(Integer, ForeignKey("listings.id"), nullable=True)
+    ownership_record_id = Column(Integer, ForeignKey("ownership_records.id"), nullable=True)
+    status = Column(String(50), nullable=False, default="review")
+    explanation = Column(String(500), nullable=False)
+    path_to_eligibility = Column(String(500), nullable=True)
+    forecast_date = Column(Date, nullable=True)
+    source_reference = Column(String(500), nullable=True)
