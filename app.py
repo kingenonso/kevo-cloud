@@ -443,6 +443,35 @@ def get_transferability_assessment(
         "path_to_eligibility": result["path_to_eligibility"],
         "forecast_date": result["forecast_date"]
     }
+
+@app.get("/transferability/matrix")
+def get_transferability_matrix(
+    asset_type: str = "Private Shares",
+    db: Session = Depends(get_db)
+):
+    rules = db.query(TransferabilityRule).filter(
+        TransferabilityRule.asset_type == asset_type,
+        TransferabilityRule.active == True
+    ).all()
+
+    matrix = {}
+
+    for rule in rules:
+        if rule.jurisdiction not in matrix:
+            matrix[rule.jurisdiction] = []
+
+        matrix[rule.jurisdiction].append({
+            "rule_code": rule.rule_code,
+            "requirement": rule.requirement,
+            "decision_if_unmet": rule.decision_if_unmet,
+            "hold_period_days": rule.hold_period_days,
+            "source_reference": rule.source_reference
+        })
+
+    return {
+        "asset_type": asset_type,
+        "jurisdictions": matrix
+    }
 @app.post("/users")
 def create_user(
     user: UserCreate,
