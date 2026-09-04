@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact
 from models import Transaction
 
 app = FastAPI(title="KEVO API")
@@ -28,6 +28,8 @@ class ListingCreate(BaseModel):
     asking_price: float
     issuer_reporting_status: str | None = None
     issuer_current_information_available: bool | None = None
+    issuer_jurisdiction: str | None = None
+    is_transferable: bool | None = None
 
 class OwnershipCreate(BaseModel):
     listing_id: int
@@ -245,6 +247,79 @@ def evaluate_compliance_rules(buyer, listing, db):
 
     return evaluations
     
+def find_applicable_transferability_rules(listing, db):
+    rules = db.query(TransferabilityRule).filter(
+        TransferabilityRule.active == True
+    ).all()
+
+    applicable_rules = []
+
+    for rule in rules:
+        if rule.jurisdiction != listing.issuer_jurisdiction:
+            continue
+
+        if rule.asset_type != listing.asset_type:
+            continue
+
+        applicable_rules.append(rule)
+
+    return applicable_rules
+    
+def evaluate_transferability(listing, db):
+    rules = find_applicable_transferability_rules(listing, db)
+
+    if not rules:
+        return {
+            "status": "review",
+            "reasons": [
+                "No transferability rules found for this listing's jurisdiction and asset type"
+            ],
+            "applicable_rule_count": 0
+        }
+
+    reasons = []
+    statuses = []
+
+    for rule in rules:
+        fact = db.query(TransferabilityFact).filter(
+            TransferabilityFact.listing_id == listing.id,
+            TransferabilityFact.fact_type == rule.fact_type
+        ).first()
+
+        if fact is None:
+            statuses.append(rule.decision_if_unmet)
+            reasons.append(
+                "Missing required fact '" + rule.fact_type + "' for rule " + rule.rule_code
+            )
+            continue
+
+        if fact.verification_status != "verified":
+            statuses.append("review")
+            reasons.append(
+                "Fact '" + rule.fact_type + "' for rule " + rule.rule_code + " is not yet verified"
+            )
+            continue
+
+    if "blocked" in statuses:
+        overall_status = "blocked"
+    elif "needs_evidence" in statuses:
+        overall_status = "needs_evidence"
+    elif "review" in statuses:
+        overall_status = "review"
+    else:
+        overall_status = "eligible_pending_review"
+
+    if not reasons:
+        reasons.append(
+            "All applicable transferability facts are present and verified — this is not a legal conclusion, human/legal review is still required"
+        )
+
+    return {
+        "status": overall_status,
+        "reasons": reasons,
+        "applicable_rule_count": len(rules)
+    }
+    
 @app.get("/")
 def home():
     return {"message": "Welcome to KEVO API"}
@@ -299,6 +374,30 @@ def get_applicable_compliance_rules(
         "listing_id": listing.id,
         "evaluated_rules": evaluations
  
+    }
+    
+@app.get("/transferability/listing/{listing_id}")
+def get_transferability_assessment(
+    listing_id: int,
+    db: Session = Depends(get_db)
+):
+    listing = db.query(ListingModel).filter(
+        ListingModel.id == listing_id
+    ).first()
+
+    if listing is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Listing not found"
+        )
+
+    result = evaluate_transferability(listing, db)
+
+    return {
+        "listing_id": listing.id,
+        "status": result["status"],
+        "reasons": result["reasons"],
+        "applicable_rule_count": result["applicable_rule_count"]
     }
 
 @app.post("/users")
@@ -568,7 +667,9 @@ def create_listing(
         quantity=listing.quantity,
         asking_price=listing.asking_price,
         issuer_reporting_status=listing.issuer_reporting_status,
-        issuer_current_information_available=listing.issuer_current_information_available
+        issuer_current_information_available=listing.issuer_current_information_available,
+        issuer_jurisdiction=listing.issuer_jurisdiction,
+        is_transferable=listing.is_transferable if listing.is_transferable is not None else False
     )
 
     db.add(new_listing)
@@ -585,7 +686,9 @@ def create_listing(
             "quantity": new_listing.quantity,
             "asking_price": float(new_listing.asking_price),
             "issuer_reporting_status": new_listing.issuer_reporting_status,
-            "issuer_current_information_available": new_listing.issuer_current_information_available
+            "issuer_current_information_available": new_listing.issuer_current_information_available,
+            "issuer_jurisdiction": new_listing.issuer_jurisdiction,
+            "is_transferable": new_listing.is_transferable
         }
     }
 
