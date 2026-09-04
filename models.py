@@ -289,3 +289,19 @@ class TransferabilityAssessment(Base):
     path_to_eligibility = Column(String(500), nullable=True)
     forecast_date = Column(Date, nullable=True)
     source_reference = Column(String(500), nullable=True)
+    
+class PositionPassport(Base):
+    __tablename__ = "position_passports"
+
+    id = Column(Integer, primary_key=True)
+    listing_id = Column(Integer, ForeignKey("listings.id"), nullable=True)
+    ownership_record_id = Column(Integer, ForeignKey("ownership_records.id"), nullable=True)
+    ownership_status = Column(String(50), nullable=False)
+    transferability_status = Column(String(50), nullable=False)
+    transferability_summary = Column(String(500), nullable=True)
+    evidence_verified_count = Column(Integer, nullable=False, default=0)
+    evidence_pending_count = Column(Integer, nullable=False, default=0)
+    overall_readiness = Column(String(50), nullable=False, default="review")
+    reasons = Column(String(500), nullable=False)
+    issued_at = Column(Date, nullable=True)
+    source_reference = Column(String(500), nullable=True)
