@@ -276,6 +276,7 @@ class TransferabilityRule(Base):
     last_verified_date = Column(Date, nullable=True)
     review_by = Column(Date, nullable=True)
     source_reference = Column(String(500), nullable=True)
+    hold_period_days = Column(Integer, nullable=True)
     
 class TransferabilityAssessment(Base):
     __tablename__ = "transferability_assessments"
