@@ -1,14 +1,13 @@
 from fastapi import FastAPI, Depends, HTTPException
 from pydantic import BaseModel
-from datetime import date
+from datetime import date, timedelta
 from sqlalchemy.orm import Session
 
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment
 from models import Transaction
-
 app = FastAPI(title="KEVO API")
 
 
@@ -274,11 +273,15 @@ def evaluate_transferability(listing, db):
             "reasons": [
                 "No transferability rules found for this listing's jurisdiction and asset type"
             ],
-            "applicable_rule_count": 0
+            "applicable_rule_count": 0,
+            "path_to_eligibility": None,
+            "forecast_date": None
         }
 
     reasons = []
     statuses = []
+    path_to_eligibility = None
+    forecast_date = None
 
     for rule in rules:
         fact = db.query(TransferabilityFact).filter(
@@ -300,6 +303,29 @@ def evaluate_transferability(listing, db):
             )
             continue
 
+        if rule.hold_period_days is not None:
+            if fact.as_of_date is None:
+                statuses.append("needs_evidence")
+                reasons.append(
+                    "Fact '" + rule.fact_type + "' for rule " + rule.rule_code + " is missing a date"
+                )
+                continue
+
+            rule_forecast_date = fact.as_of_date + timedelta(days=rule.hold_period_days)
+
+            if date.today() < rule_forecast_date:
+                statuses.append("blocked")
+                reasons.append(
+                    "Rule " + rule.rule_code + " holding period not yet met — eligible once it ends on " + rule_forecast_date.isoformat()
+                )
+                path_to_eligibility = (
+                    "Eligible once the holding period required by " + rule.rule_code +
+                    " ends on " + rule_forecast_date.isoformat()
+                )
+                if forecast_date is None or rule_forecast_date > forecast_date:
+                    forecast_date = rule_forecast_date
+                continue
+
     if "blocked" in statuses:
         overall_status = "blocked"
     elif "needs_evidence" in statuses:
@@ -317,9 +343,10 @@ def evaluate_transferability(listing, db):
     return {
         "status": overall_status,
         "reasons": reasons,
-        "applicable_rule_count": len(rules)
-    }
-    
+        "applicable_rule_count": len(rules),
+        "path_to_eligibility": path_to_eligibility,
+        "forecast_date": forecast_date
+    }    
 @app.get("/")
 def home():
     return {"message": "Welcome to KEVO API"}
@@ -393,13 +420,29 @@ def get_transferability_assessment(
 
     result = evaluate_transferability(listing, db)
 
+    explanation = "; ".join(result["reasons"])
+
+    assessment = TransferabilityAssessment(
+        listing_id=listing.id,
+        status=result["status"],
+        explanation=explanation,
+        path_to_eligibility=result["path_to_eligibility"],
+        forecast_date=result["forecast_date"]
+    )
+
+    db.add(assessment)
+    db.commit()
+    db.refresh(assessment)
+
     return {
         "listing_id": listing.id,
+        "assessment_id": assessment.id,
         "status": result["status"],
         "reasons": result["reasons"],
-        "applicable_rule_count": result["applicable_rule_count"]
+        "applicable_rule_count": result["applicable_rule_count"],
+        "path_to_eligibility": result["path_to_eligibility"],
+        "forecast_date": result["forecast_date"]
     }
-
 @app.post("/users")
 def create_user(
     user: UserCreate,
