@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence
 from models import Transaction
 app = FastAPI(title="KEVO API")
 
@@ -1232,3 +1232,101 @@ def find_matches(
         "matches_found": len(matches),
         "matches": compliance_results
     }    
+
+def build_position_passport(listing, db):
+    ownership_record = db.query(OwnershipRecord).filter(
+        OwnershipRecord.listing_id == listing.id
+    ).first()
+
+    ownership_status = ownership_record.verification_status if ownership_record else "not_on_file"
+
+    transferability_result = evaluate_transferability(listing, db)
+    transferability_status = transferability_result["status"]
+    transferability_summary = "; ".join(transferability_result["reasons"])
+
+    evidence_query = db.query(Evidence).filter(
+        Evidence.listing_id == listing.id
+    )
+    evidence_verified_count = evidence_query.filter(
+        Evidence.verification_status == "verified"
+    ).count()
+    evidence_pending_count = evidence_query.filter(
+        Evidence.verification_status != "verified"
+    ).count()
+
+    reasons = []
+
+    if ownership_status != "verified":
+        reasons.append("Ownership is not yet verified (status: " + ownership_status + ")")
+
+    if transferability_status != "eligible_pending_review":
+        reasons.append("Transferability status is '" + transferability_status + "' — " + transferability_summary)
+
+    if evidence_pending_count > 0:
+        reasons.append(str(evidence_pending_count) + " piece(s) of evidence still pending verification")
+
+    if not reasons:
+        overall_readiness = "ready"
+        reasons.append("Ownership verified, transferability eligible, and all evidence verified — this is not a legal conclusion, human/legal review is still required")
+    elif ownership_status != "verified" or transferability_status == "blocked":
+        overall_readiness = "not_ready"
+    else:
+        overall_readiness = "needs_evidence"
+
+    return {
+        "ownership_record_id": ownership_record.id if ownership_record else None,
+        "ownership_status": ownership_status,
+        "transferability_status": transferability_status,
+        "transferability_summary": transferability_summary,
+        "evidence_verified_count": evidence_verified_count,
+        "evidence_pending_count": evidence_pending_count,
+        "overall_readiness": overall_readiness,
+        "reasons": "; ".join(reasons)
+    }
+
+
+@app.get("/passport/listing/{listing_id}")
+def get_position_passport(
+    listing_id: int,
+    db: Session = Depends(get_db)
+):
+    listing = db.query(ListingModel).filter(
+        ListingModel.id == listing_id
+    ).first()
+
+    if listing is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Listing not found"
+        )
+
+    result = build_position_passport(listing, db)
+
+    passport = PositionPassport(
+        listing_id=listing.id,
+        ownership_record_id=result["ownership_record_id"],
+        ownership_status=result["ownership_status"],
+        transferability_status=result["transferability_status"],
+        transferability_summary=result["transferability_summary"],
+        evidence_verified_count=result["evidence_verified_count"],
+        evidence_pending_count=result["evidence_pending_count"],
+        overall_readiness=result["overall_readiness"],
+        reasons=result["reasons"],
+        issued_at=date.today()
+    )
+
+    db.add(passport)
+    db.commit()
+    db.refresh(passport)
+
+    return {
+        "listing_id": listing.id,
+        "passport_id": passport.id,
+        "ownership_status": result["ownership_status"],
+        "transferability_status": result["transferability_status"],
+        "evidence_verified_count": result["evidence_verified_count"],
+        "evidence_pending_count": result["evidence_pending_count"],
+        "overall_readiness": result["overall_readiness"],
+        "reasons": result["reasons"],
+        "issued_at": passport.issued_at
+    }
