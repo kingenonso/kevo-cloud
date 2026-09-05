@@ -1274,6 +1274,11 @@ def build_position_passport(listing, db):
         Evidence.verification_status != "verified"
     ).count()
 
+    lifecycle_result = build_position_events(listing, db)
+    lifecycle_status = lifecycle_result["status"]
+    position_quantity = lifecycle_result["current_quantity"]
+    quantity_basis = lifecycle_result["quantity_basis"]
+
     reasons = []
 
     if ownership_status != "verified":
@@ -1284,6 +1289,9 @@ def build_position_passport(listing, db):
 
     if evidence_pending_count > 0:
         reasons.append(str(evidence_pending_count) + " piece(s) of evidence still pending verification")
+
+    if lifecycle_status == "conflict":
+        reasons.append("Position lifecycle events disagree on quantity — " + quantity_basis)
 
     if not reasons:
         overall_readiness = "ready"
@@ -1300,6 +1308,9 @@ def build_position_passport(listing, db):
         "transferability_summary": transferability_summary,
         "evidence_verified_count": evidence_verified_count,
         "evidence_pending_count": evidence_pending_count,
+        "lifecycle_status": lifecycle_status,
+        "position_quantity": position_quantity,
+        "quantity_basis": quantity_basis,
         "overall_readiness": overall_readiness,
         "reasons": "; ".join(reasons)
     }
@@ -1330,6 +1341,9 @@ def get_position_passport(
         transferability_summary=result["transferability_summary"],
         evidence_verified_count=result["evidence_verified_count"],
         evidence_pending_count=result["evidence_pending_count"],
+        lifecycle_status=result["lifecycle_status"],
+        position_quantity=result["position_quantity"],
+        quantity_basis=result["quantity_basis"],
         overall_readiness=result["overall_readiness"],
         reasons=result["reasons"],
         issued_at=date.today()
@@ -1346,6 +1360,9 @@ def get_position_passport(
         "transferability_status": result["transferability_status"],
         "evidence_verified_count": result["evidence_verified_count"],
         "evidence_pending_count": result["evidence_pending_count"],
+        "lifecycle_status": result["lifecycle_status"],
+        "position_quantity": result["position_quantity"],
+        "quantity_basis": result["quantity_basis"],
         "overall_readiness": result["overall_readiness"],
         "reasons": result["reasons"],
         "issued_at": passport.issued_at
