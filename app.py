@@ -1495,6 +1495,17 @@ def get_offering_fact_status(offering_id, fact_type, db):
     return ("pending", None)
 
 
+def get_offering_exemption_rule_value(exemption_code, jurisdiction, requirement_type, db):
+    rule = db.query(OfferingExemptionRule).filter(
+        OfferingExemptionRule.exemption_code == exemption_code,
+        OfferingExemptionRule.jurisdiction == jurisdiction,
+        OfferingExemptionRule.requirement_type == requirement_type
+    ).first()
+    if rule is None:
+        return None
+    return rule.requirement_value
+
+
 def evaluate_506b(offering, db):
     reasons = []
     blocking = False
@@ -1630,10 +1641,219 @@ def evaluate_506c(offering, db):
     return {"exemption_code": "US-REG-D-506C", "status": status, "reasons": reasons}
 
 
+def evaluate_regcf(offering, db):
+    reasons = []
+    blocking = False
+    needs_evidence = False
+    conflict = False
+
+    cap_value = get_offering_exemption_rule_value("US-REG-CF", offering.jurisdiction, "raise_cap_12mo", db)
+    if cap_value is None:
+        needs_evidence = True
+        reasons.append("Regulation Crowdfunding raise cap is not on file for this jurisdiction")
+    elif offering.target_raise_amount is None:
+        needs_evidence = True
+        reasons.append("Offering has no target raise amount on file")
+    else:
+        try:
+            cap_amount = float(cap_value)
+            if float(offering.target_raise_amount) > cap_amount:
+                blocking = True
+                reasons.append(
+                    "Target raise amount (" + str(offering.target_raise_amount) +
+                    ") exceeds the Regulation Crowdfunding rolling 12-month cap (" + str(cap_amount) + ")"
+                )
+        except (TypeError, ValueError):
+            needs_evidence = True
+            reasons.append("Regulation Crowdfunding raise cap value on file is not a valid number")
+
+    state, value = get_offering_fact_status(offering.id, "bad_actor_disqualification_clear", db)
+    if state == "conflict":
+        conflict = True
+        reasons.append("Conflicting verified facts for bad actor disqualification")
+    elif state in ("missing", "pending"):
+        needs_evidence = True
+        reasons.append("Bad actor disqualification check not yet verified")
+    elif value != "true":
+        blocking = True
+        reasons.append("A bad actor disqualification event was found among covered persons")
+
+    state, value = get_offering_fact_status(offering.id, "funding_portal_or_broker_dealer_used", db)
+    if state == "conflict":
+        conflict = True
+        reasons.append("Conflicting verified facts for funding portal / broker-dealer use")
+    elif state in ("missing", "pending"):
+        needs_evidence = True
+        reasons.append("Use of an SEC-registered funding portal or broker-dealer not yet verified")
+    elif value != "true":
+        blocking = True
+        reasons.append("Regulation Crowdfunding requires selling through an SEC-registered funding portal or broker-dealer")
+
+    if conflict:
+        status = "conflict"
+    elif blocking:
+        status = "ineligible"
+    elif needs_evidence:
+        status = "needs_evidence"
+    else:
+        status = "eligible"
+
+    if not reasons:
+        reasons.append(
+            "All checked facts for Regulation Crowdfunding are present and verified \u2014 this is not a legal conclusion, human/legal review is still required"
+        )
+
+    return {"exemption_code": "US-REG-CF", "status": status, "reasons": reasons}
+
+
+def evaluate_reg_a_tier1(offering, db):
+    reasons = []
+    blocking = False
+    needs_evidence = False
+    conflict = False
+
+    cap_value = get_offering_exemption_rule_value("US-REG-A-TIER1", offering.jurisdiction, "raise_cap_12mo", db)
+    if cap_value is None:
+        needs_evidence = True
+        reasons.append("Regulation A+ Tier 1 raise cap is not on file for this jurisdiction")
+    elif offering.target_raise_amount is None:
+        needs_evidence = True
+        reasons.append("Offering has no target raise amount on file")
+    else:
+        try:
+            cap_amount = float(cap_value)
+            if float(offering.target_raise_amount) > cap_amount:
+                blocking = True
+                reasons.append(
+                    "Target raise amount (" + str(offering.target_raise_amount) +
+                    ") exceeds the Regulation A+ Tier 1 12-month cap (" + str(cap_amount) + ")"
+                )
+        except (TypeError, ValueError):
+            needs_evidence = True
+            reasons.append("Regulation A+ Tier 1 raise cap value on file is not a valid number")
+
+    state, value = get_offering_fact_status(offering.id, "bad_actor_disqualification_clear", db)
+    if state == "conflict":
+        conflict = True
+        reasons.append("Conflicting verified facts for bad actor disqualification")
+    elif state in ("missing", "pending"):
+        needs_evidence = True
+        reasons.append("Bad actor disqualification check not yet verified")
+    elif value != "true":
+        blocking = True
+        reasons.append("A bad actor disqualification event was found among covered persons")
+
+    state, value = get_offering_fact_status(offering.id, "sec_qualification_obtained", db)
+    if state == "conflict":
+        conflict = True
+        reasons.append("Conflicting verified facts for SEC qualification status")
+    elif state in ("missing", "pending"):
+        needs_evidence = True
+        reasons.append("SEC qualification under Form 1-A has not yet been verified as obtained")
+    elif value != "true":
+        blocking = True
+        reasons.append("Regulation A+ requires actual SEC qualification, not just a filed application")
+
+    if conflict:
+        status = "conflict"
+    elif blocking:
+        status = "ineligible"
+    elif needs_evidence:
+        status = "needs_evidence"
+    else:
+        status = "eligible"
+
+    if not reasons:
+        reasons.append(
+            "All checked facts for Regulation A+ Tier 1 are present and verified \u2014 this is not a legal conclusion, human/legal review is still required"
+        )
+
+    return {"exemption_code": "US-REG-A-TIER1", "status": status, "reasons": reasons}
+
+
+def evaluate_reg_a_tier2(offering, db):
+    reasons = []
+    blocking = False
+    needs_evidence = False
+    conflict = False
+
+    cap_value = get_offering_exemption_rule_value("US-REG-A-TIER2", offering.jurisdiction, "raise_cap_12mo", db)
+    if cap_value is None:
+        needs_evidence = True
+        reasons.append("Regulation A+ Tier 2 raise cap is not on file for this jurisdiction")
+    elif offering.target_raise_amount is None:
+        needs_evidence = True
+        reasons.append("Offering has no target raise amount on file")
+    else:
+        try:
+            cap_amount = float(cap_value)
+            if float(offering.target_raise_amount) > cap_amount:
+                blocking = True
+                reasons.append(
+                    "Target raise amount (" + str(offering.target_raise_amount) +
+                    ") exceeds the Regulation A+ Tier 2 12-month cap (" + str(cap_amount) + ")"
+                )
+        except (TypeError, ValueError):
+            needs_evidence = True
+            reasons.append("Regulation A+ Tier 2 raise cap value on file is not a valid number")
+
+    state, value = get_offering_fact_status(offering.id, "bad_actor_disqualification_clear", db)
+    if state == "conflict":
+        conflict = True
+        reasons.append("Conflicting verified facts for bad actor disqualification")
+    elif state in ("missing", "pending"):
+        needs_evidence = True
+        reasons.append("Bad actor disqualification check not yet verified")
+    elif value != "true":
+        blocking = True
+        reasons.append("A bad actor disqualification event was found among covered persons")
+
+    state, value = get_offering_fact_status(offering.id, "sec_qualification_obtained", db)
+    if state == "conflict":
+        conflict = True
+        reasons.append("Conflicting verified facts for SEC qualification status")
+    elif state in ("missing", "pending"):
+        needs_evidence = True
+        reasons.append("SEC qualification under Form 1-A has not yet been verified as obtained")
+    elif value != "true":
+        blocking = True
+        reasons.append("Regulation A+ requires actual SEC qualification, not just a filed application")
+
+    state, value = get_offering_fact_status(offering.id, "tier2_non_accredited_limits_compliance_documented", db)
+    if state == "conflict":
+        conflict = True
+        reasons.append("Conflicting verified facts for Tier 2 non-accredited investment limit compliance")
+    elif state in ("missing", "pending"):
+        needs_evidence = True
+        reasons.append("Tier 2 non-accredited investment limit compliance not yet verified")
+    elif value != "true":
+        blocking = True
+        reasons.append("Tier 2 requires documented compliance with the 10%-of-income/net-worth non-accredited investment limit")
+
+    if conflict:
+        status = "conflict"
+    elif blocking:
+        status = "ineligible"
+    elif needs_evidence:
+        status = "needs_evidence"
+    else:
+        status = "eligible"
+
+    if not reasons:
+        reasons.append(
+            "All checked facts for Regulation A+ Tier 2 are present and verified \u2014 this is not a legal conclusion, human/legal review is still required"
+        )
+
+    return {"exemption_code": "US-REG-A-TIER2", "status": status, "reasons": reasons}
+
+
 def evaluate_offering_exemptions(offering, db):
     return [
         evaluate_506b(offering, db),
-        evaluate_506c(offering, db)
+        evaluate_506c(offering, db),
+        evaluate_regcf(offering, db),
+        evaluate_reg_a_tier1(offering, db),
+        evaluate_reg_a_tier2(offering, db)
     ]
 
 
