@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment
 from models import Transaction
 app = FastAPI(title="KEVO API")
 
@@ -1421,3 +1421,201 @@ def get_position_events(
         "quantity_basis": result["quantity_basis"],
         "events": result["events"]
     }
+
+
+def get_offering_fact_status(offering_id, fact_type, db):
+    facts = db.query(OfferingFact).filter(
+        OfferingFact.offering_id == offering_id,
+        OfferingFact.fact_type == fact_type,
+        OfferingFact.superseded_by_id.is_(None)
+    ).all()
+
+    if not facts:
+        return ("missing", None)
+
+    verified = [f for f in facts if f.verification_status == "verified"]
+    distinct_values = set(f.fact_value for f in verified)
+
+    if len(distinct_values) > 1:
+        return ("conflict", None)
+    if verified:
+        return ("verified", verified[0].fact_value)
+    return ("pending", None)
+
+
+def evaluate_506b(offering, db):
+    reasons = []
+    blocking = False
+    needs_evidence = False
+    conflict = False
+
+    if offering.general_solicitation_used:
+        reasons.append("506(b) does not permit general solicitation, and this offering uses it")
+        blocking = True
+
+    state, value = get_offering_fact_status(offering.id, "bad_actor_disqualification_clear", db)
+    if state == "conflict":
+        conflict = True
+        reasons.append("Conflicting verified facts for bad actor disqualification")
+    elif state in ("missing", "pending"):
+        needs_evidence = True
+        reasons.append("Bad actor disqualification check not yet verified")
+    elif value != "true":
+        blocking = True
+        reasons.append("A bad actor disqualification event was found among covered persons")
+
+    state, value = get_offering_fact_status(offering.id, "non_accredited_investor_count", db)
+    non_accredited_count = None
+    if state == "conflict":
+        conflict = True
+        reasons.append("Conflicting verified facts for non-accredited investor count")
+    elif state in ("missing", "pending"):
+        needs_evidence = True
+        reasons.append("Non-accredited investor count not yet verified")
+    else:
+        try:
+            non_accredited_count = int(value)
+            if non_accredited_count > 35:
+                blocking = True
+                reasons.append("More than 35 non-accredited investors (" + value + ") exceeds the 506(b) limit")
+        except ValueError:
+            needs_evidence = True
+            reasons.append("Non-accredited investor count fact value is not a valid number")
+
+    if non_accredited_count is not None and non_accredited_count > 0:
+        state, value = get_offering_fact_status(offering.id, "non_accredited_investors_sophisticated", db)
+        if state == "conflict":
+            conflict = True
+            reasons.append("Conflicting verified facts for non-accredited investor sophistication")
+        elif state in ("missing", "pending"):
+            needs_evidence = True
+            reasons.append("Non-accredited investor sophistication not yet verified")
+        elif value != "true":
+            blocking = True
+            reasons.append("Non-accredited investors have not been confirmed sophisticated")
+
+        state, value = get_offering_fact_status(offering.id, "disclosure_provided_to_non_accredited", db)
+        if state == "conflict":
+            conflict = True
+            reasons.append("Conflicting verified facts for non-accredited disclosure")
+        elif state in ("missing", "pending"):
+            needs_evidence = True
+            reasons.append("Required disclosure to non-accredited investors not yet verified")
+        elif value != "true":
+            blocking = True
+            reasons.append("Required disclosure has not been provided to non-accredited investors")
+
+    if conflict:
+        status = "conflict"
+    elif blocking:
+        status = "ineligible"
+    elif needs_evidence:
+        status = "needs_evidence"
+    else:
+        status = "eligible"
+
+    if not reasons:
+        reasons.append(
+            "All checked facts for 506(b) are present and verified \u2014 this is not a legal conclusion, human/legal review is still required"
+        )
+
+    return {"exemption_code": "US-REG-D-506B", "status": status, "reasons": reasons}
+
+
+def evaluate_506c(offering, db):
+    reasons = []
+    blocking = False
+    needs_evidence = False
+    conflict = False
+
+    state, value = get_offering_fact_status(offering.id, "bad_actor_disqualification_clear", db)
+    if state == "conflict":
+        conflict = True
+        reasons.append("Conflicting verified facts for bad actor disqualification")
+    elif state in ("missing", "pending"):
+        needs_evidence = True
+        reasons.append("Bad actor disqualification check not yet verified")
+    elif value != "true":
+        blocking = True
+        reasons.append("A bad actor disqualification event was found among covered persons")
+
+    state, value = get_offering_fact_status(offering.id, "all_investors_accredited", db)
+    if state == "conflict":
+        conflict = True
+        reasons.append("Conflicting verified facts for investor accreditation status")
+    elif state in ("missing", "pending"):
+        needs_evidence = True
+        reasons.append("Investor accreditation status not yet verified")
+    elif value != "true":
+        blocking = True
+        reasons.append("506(c) requires all investors to be accredited \u2014 at least one is not")
+
+    state, value = get_offering_fact_status(offering.id, "accreditation_verification_documented", db)
+    if state == "conflict":
+        conflict = True
+        reasons.append("Conflicting verified facts for accreditation verification documentation")
+    elif state in ("missing", "pending"):
+        needs_evidence = True
+        reasons.append("Documented \'reasonable steps to verify\' accreditation not yet on file")
+    elif value != "true":
+        blocking = True
+        reasons.append("506(c) requires documented reasonable steps to verify accreditation \u2014 self-certification alone is not sufficient")
+
+    if conflict:
+        status = "conflict"
+    elif blocking:
+        status = "ineligible"
+    elif needs_evidence:
+        status = "needs_evidence"
+    else:
+        status = "eligible"
+
+    if not reasons:
+        reasons.append(
+            "All checked facts for 506(c) are present and verified \u2014 this is not a legal conclusion, human/legal review is still required"
+        )
+
+    return {"exemption_code": "US-REG-D-506C", "status": status, "reasons": reasons}
+
+
+def evaluate_offering_exemptions(offering, db):
+    return [
+        evaluate_506b(offering, db),
+        evaluate_506c(offering, db)
+    ]
+
+
+@app.get("/offering-exemptions/{offering_id}")
+def get_offering_exemptions(
+    offering_id: int,
+    db: Session = Depends(get_db)
+):
+    offering = db.query(Offering).filter(
+        Offering.id == offering_id
+    ).first()
+
+    if offering is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Offering not found"
+        )
+
+    assessments = evaluate_offering_exemptions(offering, db)
+
+    for a in assessments:
+        record = OfferingExemptionAssessment(
+            offering_id=offering.id,
+            exemption_code=a["exemption_code"],
+            status=a["status"],
+            reasons="; ".join(a["reasons"]),
+            assessed_at=date.today()
+        )
+        db.add(record)
+
+    db.commit()
+
+    return {
+        "offering_id": offering.id,
+        "assessments": assessments
+    }
+
