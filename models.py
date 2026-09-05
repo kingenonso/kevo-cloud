@@ -324,3 +324,51 @@ class PositionEvent(Base):
     notes = Column(String(500), nullable=True)
     source_reference = Column(String(500), nullable=True)
     superseded_by_id = Column(Integer, ForeignKey("position_events.id"), nullable=True)
+
+class Offering(Base):
+    __tablename__ = "offerings"
+
+    id = Column(Integer, primary_key=True)
+    issuer_name = Column(String(200), nullable=False)
+    jurisdiction = Column(String(100), nullable=False)
+    target_raise_amount = Column(Numeric, nullable=True)
+    offering_start_date = Column(Date, nullable=True)
+    offering_end_date = Column(Date, nullable=True)
+    general_solicitation_used = Column(Boolean, nullable=False, default=False)
+    status = Column(String(50), nullable=False, default="planning")
+
+class OfferingFact(Base):
+    __tablename__ = "offering_facts"
+
+    id = Column(Integer, primary_key=True)
+    offering_id = Column(Integer, ForeignKey("offerings.id"), nullable=False)
+    evidence_id = Column(Integer, ForeignKey("evidence.id"), nullable=True)
+    fact_type = Column(String(100), nullable=False)
+    fact_value = Column(String(500), nullable=False)
+    as_of_date = Column(Date, nullable=True)
+    verification_status = Column(String(50), nullable=False, default="pending")
+    source_reference = Column(String(500), nullable=True)
+    superseded_by_id = Column(Integer, ForeignKey("offering_facts.id"), nullable=True)
+
+class OfferingExemptionRule(Base):
+    __tablename__ = "offering_exemption_rules"
+
+    id = Column(Integer, primary_key=True)
+    jurisdiction = Column(String(100), nullable=False)
+    exemption_code = Column(String(100), nullable=False)
+    requirement_type = Column(String(100), nullable=False)
+    requirement_value = Column(String(500), nullable=False)
+    source_reference = Column(String(500), nullable=False)
+    last_verified_date = Column(Date, nullable=True)
+    review_by = Column(Date, nullable=True)
+
+class OfferingExemptionAssessment(Base):
+    __tablename__ = "offering_exemption_assessments"
+
+    id = Column(Integer, primary_key=True)
+    offering_id = Column(Integer, ForeignKey("offerings.id"), nullable=False)
+    exemption_code = Column(String(100), nullable=False)
+    status = Column(String(50), nullable=False)
+    reasons = Column(String(500), nullable=False)
+    assessed_at = Column(Date, nullable=True)
+
