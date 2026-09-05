@@ -1847,13 +1847,65 @@ def evaluate_reg_a_tier2(offering, db):
     return {"exemption_code": "US-REG-A-TIER2", "status": status, "reasons": reasons}
 
 
+def evaluate_reg_s(offering, db):
+    if offering.jurisdiction != "United States":
+        return {
+            "exemption_code": "US-REG-S",
+            "status": "needs_evidence",
+            "reasons": [
+                "Regulation S category determination for non-US issuers is not yet modeled in KEVO \u2014 only the Category 3 (US-organized issuer) pathway is currently evaluated"
+            ]
+        }
+
+    reasons = []
+    blocking = False
+    needs_evidence = False
+    conflict = False
+
+    reg_s_facts = [
+        ("offshore_transaction_confirmed", "Offshore transaction status (Rule 902(h)) not yet verified", "Sale has not been confirmed as an offshore transaction under Rule 902(h)"),
+        ("no_directed_selling_efforts_in_us", "Absence of directed selling efforts in the US not yet verified", "Directed selling efforts in the US were found, which disqualifies Regulation S"),
+        ("reg_s_purchaser_certification_documented", "Purchaser non-US-person certification not yet verified", "Category 3 equity requires documented purchaser certification of non-US-person status"),
+        ("reg_s_transfer_legend_applied", "Transfer legend on the securities not yet verified", "Category 3 for a domestic issuer requires a transfer legend restricting resale into the US")
+    ]
+
+    for fact_type, evidence_reason, blocking_reason in reg_s_facts:
+        state, value = get_offering_fact_status(offering.id, fact_type, db)
+        if state == "conflict":
+            conflict = True
+            reasons.append("Conflicting verified facts for " + fact_type)
+        elif state in ("missing", "pending"):
+            needs_evidence = True
+            reasons.append(evidence_reason)
+        elif value != "true":
+            blocking = True
+            reasons.append(blocking_reason)
+
+    if conflict:
+        status = "conflict"
+    elif blocking:
+        status = "ineligible"
+    elif needs_evidence:
+        status = "needs_evidence"
+    else:
+        status = "eligible"
+
+    if not reasons:
+        reasons.append(
+            "All checked facts for Regulation S (Category 3, US-organized issuer) are present and verified \u2014 this is not a legal conclusion, human/legal review is still required"
+        )
+
+    return {"exemption_code": "US-REG-S", "status": status, "reasons": reasons}
+
+
 def evaluate_offering_exemptions(offering, db):
     return [
         evaluate_506b(offering, db),
         evaluate_506c(offering, db),
         evaluate_regcf(offering, db),
         evaluate_reg_a_tier1(offering, db),
-        evaluate_reg_a_tier2(offering, db)
+        evaluate_reg_a_tier2(offering, db),
+        evaluate_reg_s(offering, db)
     ]
 
 
