@@ -306,3 +306,21 @@ class PositionPassport(Base):
     reasons = Column(String(500), nullable=False)
     issued_at = Column(Date, nullable=True)
     source_reference = Column(String(500), nullable=True)
+
+class PositionEvent(Base):
+    __tablename__ = "position_events"
+
+    id = Column(Integer, primary_key=True)
+    listing_id = Column(Integer, ForeignKey("listings.id"), nullable=False)
+    ownership_record_id = Column(Integer, ForeignKey("ownership_records.id"), nullable=True)
+    event_type = Column(String(50), nullable=False)
+    effective_date = Column(Date, nullable=True)
+    source = Column(String(100), nullable=False)
+    submitting_party = Column(String(200), nullable=True)
+    evidence_id = Column(Integer, ForeignKey("evidence.id"), nullable=True)
+    verification_status = Column(String(50), nullable=False, default="pending")
+    quantity_before = Column(Integer, nullable=True)
+    quantity_after = Column(Integer, nullable=True)
+    notes = Column(String(500), nullable=True)
+    source_reference = Column(String(500), nullable=True)
+    superseded_by_id = Column(Integer, ForeignKey("position_events.id"), nullable=True)
