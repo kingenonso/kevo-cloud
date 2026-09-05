@@ -290,24 +290,42 @@ def evaluate_transferability(listing, db):
     ).first()
 
     for rule in rules:
-        fact = db.query(TransferabilityFact).filter(
+        facts = db.query(TransferabilityFact).filter(
             TransferabilityFact.listing_id == listing.id,
-            TransferabilityFact.fact_type == rule.fact_type
-        ).first()
+            TransferabilityFact.fact_type == rule.fact_type,
+            TransferabilityFact.superseded_by_id.is_(None)
+        ).all()
 
-        if fact is None:
+        if not facts:
             statuses.append(rule.decision_if_unmet)
             reasons.append(
                 "Missing required fact '" + rule.fact_type + "' for rule " + rule.rule_code
             )
             continue
 
-        if fact.verification_status != "verified":
+        verified_facts = [f for f in facts if f.verification_status == "verified"]
+        distinct_values = set(f.fact_value for f in verified_facts)
+
+        if len(distinct_values) > 1:
+            statuses.append("conflict")
+            conflict_detail = "; ".join(
+                "'" + f.fact_value + "' (source: " + (f.source_reference or "unknown") + ")"
+                for f in verified_facts
+            )
+            reasons.append(
+                "Conflicting verified facts for '" + rule.fact_type + "' under rule " + rule.rule_code +
+                " — " + conflict_detail + " — issuer or authorized-party verification needed to resolve"
+            )
+            continue
+
+        if not verified_facts:
             statuses.append("review")
             reasons.append(
                 "Fact '" + rule.fact_type + "' for rule " + rule.rule_code + " is not yet verified"
             )
             continue
+
+        fact = verified_facts[0]
 
         if estate_fact is not None and rule.jurisdiction == "United States":
             reasons.append(
@@ -338,7 +356,9 @@ def evaluate_transferability(listing, db):
                     forecast_date = rule_forecast_date
                 continue
 
-    if "blocked" in statuses:
+    if "conflict" in statuses:
+        overall_status = "conflict"
+    elif "blocked" in statuses:
         overall_status = "blocked"
     elif "needs_evidence" in statuses:
         overall_status = "needs_evidence"

@@ -260,6 +260,7 @@ class TransferabilityFact(Base):
     as_of_date = Column(Date, nullable=True)
     verification_status = Column(String(50), nullable=False, default="pending")
     source_reference = Column(String(500), nullable=True)
+    superseded_by_id = Column(Integer, ForeignKey("transferability_facts.id"), nullable=True)
 
 class TransferabilityRule(Base):
     __tablename__ = "transferability_rules"
