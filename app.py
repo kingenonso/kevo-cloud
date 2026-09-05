@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent
 from models import Transaction
 app = FastAPI(title="KEVO API")
 
@@ -1349,4 +1349,75 @@ def get_position_passport(
         "overall_readiness": result["overall_readiness"],
         "reasons": result["reasons"],
         "issued_at": passport.issued_at
+    }
+
+
+def build_position_events(listing, db):
+    events = db.query(PositionEvent).filter(
+        PositionEvent.listing_id == listing.id,
+        PositionEvent.superseded_by_id.is_(None)
+    ).order_by(PositionEvent.effective_date.asc().nullslast()).all()
+
+    verified_events = [e for e in events if e.verification_status == "verified"]
+
+    ownership_record = db.query(OwnershipRecord).filter(
+        OwnershipRecord.listing_id == listing.id
+    ).first()
+
+    if verified_events:
+        latest_event = verified_events[-1]
+        current_quantity = latest_event.quantity_after
+        quantity_basis = (
+            "Latest verified event: " + latest_event.event_type +
+            " effective " + (latest_event.effective_date.isoformat() if latest_event.effective_date else "unknown date")
+        )
+    elif ownership_record is not None:
+        current_quantity = ownership_record.quantity
+        quantity_basis = "No verified position events on file — quantity taken from OwnershipRecord"
+    else:
+        current_quantity = None
+        quantity_basis = "No ownership record or verified position events on file"
+
+    return {
+        "current_quantity": current_quantity,
+        "quantity_basis": quantity_basis,
+        "events": [
+            {
+                "id": e.id,
+                "event_type": e.event_type,
+                "effective_date": e.effective_date,
+                "source": e.source,
+                "submitting_party": e.submitting_party,
+                "verification_status": e.verification_status,
+                "quantity_before": e.quantity_before,
+                "quantity_after": e.quantity_after,
+                "notes": e.notes
+            }
+            for e in events
+        ]
+    }
+
+
+@app.get("/position-events/listing/{listing_id}")
+def get_position_events(
+    listing_id: int,
+    db: Session = Depends(get_db)
+):
+    listing = db.query(ListingModel).filter(
+        ListingModel.id == listing_id
+    ).first()
+
+    if listing is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Listing not found"
+        )
+
+    result = build_position_events(listing, db)
+
+    return {
+        "listing_id": listing.id,
+        "current_quantity": result["current_quantity"],
+        "quantity_basis": result["quantity_basis"],
+        "events": result["events"]
     }
