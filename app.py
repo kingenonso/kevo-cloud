@@ -1364,13 +1364,34 @@ def build_position_events(listing, db):
         OwnershipRecord.listing_id == listing.id
     ).first()
 
+    conflict_events = []
+
     if verified_events:
-        latest_event = verified_events[-1]
-        current_quantity = latest_event.quantity_after
-        quantity_basis = (
-            "Latest verified event: " + latest_event.event_type +
-            " effective " + (latest_event.effective_date.isoformat() if latest_event.effective_date else "unknown date")
-        )
+        dated_events = [e for e in verified_events if e.effective_date is not None]
+        if dated_events:
+            latest_date = max(e.effective_date for e in dated_events)
+            events_at_latest_date = [e for e in dated_events if e.effective_date == latest_date]
+        else:
+            latest_date = None
+            events_at_latest_date = [e for e in verified_events if e.effective_date is None]
+
+        distinct_quantities = set(e.quantity_after for e in events_at_latest_date)
+
+        if len(events_at_latest_date) > 1 and len(distinct_quantities) > 1:
+            conflict_events = events_at_latest_date
+            current_quantity = None
+            quantity_basis = (
+                str(len(events_at_latest_date)) + " verified events disagree on the position quantity as of " +
+                (latest_date.isoformat() if latest_date else "an undated effective date") +
+                " — issuer or authorized-party verification needed"
+            )
+        else:
+            latest_event = verified_events[-1]
+            current_quantity = latest_event.quantity_after
+            quantity_basis = (
+                "Latest verified event: " + latest_event.event_type +
+                " effective " + (latest_event.effective_date.isoformat() if latest_event.effective_date else "unknown date")
+            )
     elif ownership_record is not None:
         current_quantity = ownership_record.quantity
         quantity_basis = "No verified position events on file — quantity taken from OwnershipRecord"
@@ -1381,6 +1402,18 @@ def build_position_events(listing, db):
     return {
         "current_quantity": current_quantity,
         "quantity_basis": quantity_basis,
+        "status": "conflict" if conflict_events else "ok",
+        "conflicting_events": [
+            {
+                "id": e.id,
+                "event_type": e.event_type,
+                "effective_date": e.effective_date,
+                "source": e.source,
+                "submitting_party": e.submitting_party,
+                "quantity_after": e.quantity_after
+            }
+            for e in conflict_events
+        ],
         "events": [
             {
                 "id": e.id,
@@ -1419,6 +1452,8 @@ def get_position_events(
         "listing_id": listing.id,
         "current_quantity": result["current_quantity"],
         "quantity_basis": result["quantity_basis"],
+        "status": result["status"],
+        "conflicting_events": result["conflicting_events"],
         "events": result["events"]
     }
 
