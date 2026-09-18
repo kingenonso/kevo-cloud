@@ -15,6 +15,8 @@ class User(Base):
     kyc_status = Column(String(50), nullable=False, default="not_started")
     jurisdiction = Column(String(100), nullable=True)
     seller_affiliate_status = Column(String(50), nullable=True)
+    hashed_password = Column(String(255), nullable=True)
+    account_type = Column(String(50), nullable=False, default="participant")
 
     listings = relationship("Listing", back_populates="seller")
 
@@ -211,7 +213,22 @@ class ComplianceRule(Base):
         nullable=False
     )
 
-    decision = Column(
+    fact_type = Column(
+        String(100),
+        nullable=False
+    )
+
+    fact_validity_days = Column(
+        Integer,
+        nullable=True
+    )
+
+    requirement = Column(
+        String(500),
+        nullable=False
+    )
+
+    decision_if_unmet = Column(
         String(50),
         nullable=False
     )
@@ -262,6 +279,22 @@ class TransferabilityFact(Base):
     source_reference = Column(String(500), nullable=True)
     superseded_by_id = Column(Integer, ForeignKey("transferability_facts.id"), nullable=True)
 
+
+class KYCFact(Base):
+    __tablename__ = "kyc_facts"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    jurisdiction = Column(String(100), nullable=True)
+    fact_type = Column(String(100), nullable=False)
+    fact_value = Column(String(500), nullable=False)
+    as_of_date = Column(Date, nullable=True)
+    verification_status = Column(String(50), nullable=False, default="pending")
+    evidence_id = Column(Integer, ForeignKey("evidence.id"), nullable=True)
+    source_reference = Column(String(500), nullable=True)
+    superseded_by_id = Column(Integer, ForeignKey("kyc_facts.id"), nullable=True)
+
+
 class TransferabilityRule(Base):
     __tablename__ = "transferability_rules"
 
@@ -278,6 +311,7 @@ class TransferabilityRule(Base):
     review_by = Column(Date, nullable=True)
     source_reference = Column(String(500), nullable=True)
     hold_period_days = Column(Integer, nullable=True)
+    expected_fact_value = Column(String(500), nullable=True)
     
 class TransferabilityAssessment(Base):
     __tablename__ = "transferability_assessments"
@@ -374,4 +408,26 @@ class OfferingExemptionAssessment(Base):
     status = Column(String(50), nullable=False)
     reasons = Column(String(500), nullable=False)
     assessed_at = Column(Date, nullable=True)
+
+class LiquidityPathStep(Base):
+    __tablename__ = "liquidity_path_steps"
+
+    id = Column(Integer, primary_key=True)
+    listing_id = Column(Integer, ForeignKey("listings.id"), nullable=False)
+    ownership_record_id = Column(Integer, ForeignKey("ownership_records.id"), nullable=True)
+    transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)
+    run_id = Column(String(64), nullable=False)
+    computed_at = Column(Date, nullable=True)
+    step_type = Column(String(50), nullable=False)
+    sequence_position = Column(Integer, nullable=False)
+    required = Column(Boolean, nullable=True)
+    complete = Column(Boolean, nullable=False, default=False)
+    evidence_reference_type = Column(String(100), nullable=True)
+    evidence_reference_id = Column(Integer, nullable=True)
+    responsible_party = Column(String(50), nullable=False)
+    blocking_step_id = Column(Integer, ForeignKey("liquidity_path_steps.id"), nullable=True)
+    completion_trigger = Column(String(500), nullable=True)
+    determinability = Column(String(50), nullable=False, default="cannot_determine")
+    reasons = Column(String(500), nullable=False)
+    source_milestone = Column(String(100), nullable=True)
 

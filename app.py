@@ -1,12 +1,20 @@
+import bisect
+import os
+import statistics
+from collections import defaultdict
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from sqlalchemy.orm import Session
+import uuid
+import bcrypt
+import jwt
 
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact
 from models import Transaction
 app = FastAPI(title="KEVO API")
 
@@ -14,8 +22,19 @@ app = FastAPI(title="KEVO API")
 class UserCreate(BaseModel):
     name: str
     email: str
+    password: str
     role: str = "buyer"
     seller_affiliate_status: str | None = None
+    jurisdiction: str | None = None
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class SetPasswordRequest(BaseModel):
+    password: str
 
 
 class ListingCreate(BaseModel):
@@ -61,6 +80,16 @@ class InvestorEligibilityCreate(BaseModel):
     effective_date: str | None = None
     review_date: str | None = None
     jurisdiction: str | None = None
+
+class KYCFactCreate(BaseModel):
+    user_id: int
+    jurisdiction: str | None = None
+    fact_type: str
+    fact_value: str
+    as_of_date: date | None = None
+    evidence_id: int | None = None
+    source_reference: str | None = None
+
 class ComplianceRuleCreate(BaseModel):
     buyer_jurisdiction: str | None = None
     issuer_jurisdiction: str | None = None
@@ -68,129 +97,109 @@ class ComplianceRuleCreate(BaseModel):
     investor_classification: str | None = None
     rule_code: str
     description: str
-    decision: str
+    fact_type: str
+    requirement: str
+    decision_if_unmet: str
     requires_human_review: bool = True
     active: bool = True
     source_reference: str | None = None
 
-def check_compliance(buyer, listing, db):
-    eligibility = db.query(InvestorEligibility).filter(
-        InvestorEligibility.buyer_id == buyer.id
-    ).first()
-    ownership = db.query(OwnershipRecord).filter(
-        OwnershipRecord.listing_id == listing.id,
-        OwnershipRecord.seller_id == listing.seller_id,
-        OwnershipRecord.verification_status == "verified"
-    ).first()
-    seller = db.query(UserModel).filter(
-        UserModel.id == listing.seller_id
-    ).first()
+# ---------------------------------------------------------------------------
+# M13 - Compliance Engine (single-engine remediation, 2026-09-09)
+#
+# Replaces the former check_compliance() (hardcoded checklist that could
+# never actually return "eligible" - every branch terminated in "blocked"
+# or "review") and evaluate_compliance_rules() (a real data-driven rule
+# matcher against ComplianceRule that was never combined with a verdict).
+# Mirrors assess_transferability()'s structure and precedence on purpose:
+# blocked > needs_evidence > review > eligible_pending_review. See the
+# M13 architecture review (2026-09-09) for the full design rationale.
+#
+# Per that review: no ComplianceRule content is seeded here. Real rules
+# require a dedicated jurisdiction-by-jurisdiction regulatory research
+# pass with cited sources first, the same discipline
+# seed_transferability_rules.py already applied for M14.
+# ---------------------------------------------------------------------------
 
-    checks = {
-        "kyc_verified": buyer.kyc_status == "verified",
-        "asset_transferable": listing.is_transferable,
-        "eligibility_record_exists": eligibility is not None,
-        "ownership_record_exists": ownership is not None,
-        "issuer_reporting_status_present": listing.issuer_reporting_status is not None,
-        "issuer_reporting_status": listing.issuer_reporting_status,
-        "issuer_current_information_available": listing.issuer_current_information_available,
-        "issuer_current_information_available_present": listing.issuer_current_information_available is not None,
-        "seller_affiliate_status_present": (
-            seller is not None
-            and seller.seller_affiliate_status is not None
-    ),
-    "seller_affiliate_status": (
-        seller.seller_affiliate_status
-        if seller is not None
-        else None
-),
-    "eligibility_verified": (
-        eligibility is not None
-        and eligibility.status == "verified"
-    ),
-    "acquisition_date_present": (
-        ownership is not None
-        and ownership.acquisition_date is not None
-),
-    "acquisition_date": (
-    ownership.acquisition_date
-    if ownership is not None
-    else None
-)
-}
-    reasons = []
+def _resolve_compliance_fact(fact_type, buyer, listing, db):
+    """
+    Returns (normalized_value, evidenced, as_of_date). Extends M13's
+    original two-value contract with a third: the date the fact was
+    established, when the underlying record has one. as_of_date is
+    None for fact types with no natural "as of" date - only
+    eligibility_verified currently returns a real one, sourced from
+    InvestorEligibility.effective_date, so a rule can check whether a
+    classification has gone stale (fact_validity_days on ComplianceRule).
+    Deliberately reuses real, already-collected data rather than a
+    separate fact table: two of these fact_types
+    (issuer_reporting_status, issuer_current_information_available)
+    read the same Listing columns M14 already reads, and
+    seller_affiliate_status reads the same User column - independently,
+    not coupled to M14's engine. A recorded-but-unverified
+    OwnershipRecord/InvestorEligibility row is treated the same as a
+    missing one.
+    """
+    if fact_type == "ownership_verified":
+        ownership = db.query(OwnershipRecord).filter(
+            OwnershipRecord.listing_id == listing.id,
+            OwnershipRecord.seller_id == listing.seller_id,
+            OwnershipRecord.verification_status == "verified"
+        ).first()
+        if ownership is None:
+            return None, False, None
+        return "verified", True, None
 
-    if not checks["kyc_verified"]:
-        reasons.append("Buyer KYC is not verified")
+    if fact_type == "acquisition_date_present":
+        ownership = db.query(OwnershipRecord).filter(
+            OwnershipRecord.listing_id == listing.id,
+            OwnershipRecord.seller_id == listing.seller_id,
+            OwnershipRecord.verification_status == "verified"
+        ).first()
+        if ownership is None or ownership.acquisition_date is None:
+            return None, False, None
+        return "present", True, None
 
-    if not checks["asset_transferable"]:
-        reasons.append("Listing is not confirmed transferable")
+    if fact_type == "eligibility_verified":
+        eligibility = db.query(InvestorEligibility).filter(
+            InvestorEligibility.buyer_id == buyer.id,
+            InvestorEligibility.status == "verified"
+        ).first()
+        if eligibility is None:
+            return None, False, None
+        return "verified", True, eligibility.effective_date
 
-    if buyer.jurisdiction is None:
-        reasons.append("Buyer jurisdiction is missing")
+    if fact_type == "issuer_reporting_status":
+        if listing.issuer_reporting_status is None:
+            return None, False, None
+        return listing.issuer_reporting_status.strip().lower(), True, None
 
-    if listing.issuer_jurisdiction is None:
-        reasons.append("Issuer jurisdiction is missing")
-    if not checks["ownership_record_exists"]:
-        reasons.append("Ownership record is missing for regulatory review")
-    if checks["ownership_record_exists"] and not checks["acquisition_date_present"]:
-        reasons.append("Ownership acquisition date is missing for regulatory review")
-    if not checks["issuer_current_information_available_present"]:
-        reasons.append("Current issuer information availability is missing for regulatory review")
-    if not checks["issuer_reporting_status_present"]:
-        reasons.append("Issuer reporting status is missing for regulatory review")
-    if not checks["seller_affiliate_status_present"]:
-        reasons.append("Seller affiliate status is missing for regulatory review")
+    if fact_type == "issuer_current_information_available":
+        if listing.issuer_current_information_available is None:
+            return None, False, None
+        value = "available" if listing.issuer_current_information_available else "not_available"
+        return value, True, None
 
-    if not checks["kyc_verified"] or not checks["asset_transferable"]:
-        return {
-            "status": "blocked",
-            "reasons": reasons,
-            "checks": checks
-        }
+    if fact_type == "seller_affiliate_status":
+        seller = db.query(UserModel).filter(UserModel.id == listing.seller_id).first()
+        if seller is None or seller.seller_affiliate_status is None:
+            return None, False, None
+        return seller.seller_affiliate_status.strip().lower(), True, None
 
-    if buyer.jurisdiction is None or listing.issuer_jurisdiction is None:
-        return {
-            "status": "review",
-            "reasons": reasons,
-            "checks": checks
-        }
+    return None, False, None
 
-    if not checks["eligibility_record_exists"]:
-        return {
-            "status": "review",
-            "reasons": reasons + [
-                "Investor eligibility record is missing"
-            ],
-            "checks": checks
-        }
 
-    if not checks["eligibility_verified"]:
-        return {
-            "status": "review",
-            "reasons": reasons + [
-                "Investor eligibility has not been verified"
-            ]       ,
-            "checks": checks
-        }
-
-    return {
-        "status": "review",
-        "reasons": reasons + [
-            "Jurisdiction eligibility requires applicable legal and regulatory rule evaluation"
-        ],
-        "checks": checks
-    }
 def find_applicable_rules(buyer, listing, db):
-    eligibility = db.query(InvestorEligibility).filter(
-        InvestorEligibility.buyer_id == buyer.id
-    ).first()
-
-    investor_classification = None
-
-    if eligibility is not None:
-        investor_classification = eligibility.classification
-
+    """
+    Scopes ComplianceRule rows by buyer_jurisdiction / issuer_jurisdiction
+    / asset_type only (None on a rule = wildcard, matches anything).
+    investor_classification is deliberately NOT used as a scoping filter
+    here - a rule that names a required classification is always
+    returned once the other three dimensions match, so assess_compliance()
+    can see it and explicitly evaluate whether the buyer's actual
+    classification satisfies it (met / wrong classification / not yet
+    classified), instead of the rule silently disappearing for a buyer
+    who doesn't already carry that exact classification.
+    """
     rules = db.query(ComplianceRule).filter(
         ComplianceRule.active == True
     ).all()
@@ -216,36 +225,261 @@ def find_applicable_rules(buyer, listing, db):
         ):
             continue
 
-        if (
-            rule.investor_classification is not None
-            and rule.investor_classification != investor_classification
-        ):
-            continue
-
         applicable_rules.append(rule)
 
     return applicable_rules
 
-def evaluate_compliance_rules(buyer, listing, db):
-    rules = find_applicable_rules(
-        buyer,
-        listing,
-        db
+
+def _check_investor_classification(rule, buyer, db):
+    """
+    Evaluates whether the buyer's recorded investor classification
+    satisfies a rule's investor_classification requirement. Returns one
+    of:
+      "not_applicable"   - rule.investor_classification is blank, this
+                            rule doesn't require any particular
+                            classification.
+      "missing_evidence" - buyer has no verified InvestorEligibility row
+                            yet, or their certification has gone stale
+                            (see fact_validity_days below).
+      "met"               - buyer's verified classification matches what
+                            the rule requires.
+      "blocked" / "review" - buyer's verified classification does NOT
+                            match what the rule requires; which of the
+                            two reuses the rule's own decision_if_unmet,
+                            same as every other unmet-fact outcome in
+                            this engine.
+
+    Also applies fact_validity_days here: if the rule sets it, a verified
+    classification whose InvestorEligibility.effective_date is further
+    back than fact_validity_days is treated as stale - same outcome as
+    never being verified at all, not a hard block. This is what makes a
+    rule like Australia's 6-month sophisticated-investor certificate
+    (AU-SOPH-001) actually expire instead of being verified-forever.
+    """
+    if rule.investor_classification is None:
+        return "not_applicable"
+
+    eligibility = db.query(InvestorEligibility).filter(
+        InvestorEligibility.buyer_id == buyer.id,
+        InvestorEligibility.status == "verified"
+    ).first()
+
+    if eligibility is None:
+        return "missing_evidence"
+
+    if rule.fact_validity_days is not None:
+        if eligibility.effective_date is None:
+            return "missing_evidence"
+        expires_on = eligibility.effective_date + timedelta(days=rule.fact_validity_days)
+        if date.today() > expires_on:
+            return "missing_evidence"
+
+    if eligibility.classification.strip().lower() == rule.investor_classification.strip().lower():
+        return "met"
+
+    return "blocked" if rule.decision_if_unmet == "blocked" else "review"
+
+
+def assess_compliance(buyer, listing, db):
+    """
+    Single M13 compliance verdict. Status meanings:
+
+      blocked                 - a hard platform gate failed (KYC
+                                 unverified, listing not marked
+                                 transferable), a seeded rule's
+                                 requirement is unmet with
+                                 decision_if_unmet="blocked", or the
+                                 buyer's verified investor classification
+                                 does not match what a rule requires
+                                 (decision_if_unmet="blocked").
+      needs_evidence           - a required fact (jurisdiction, a rule's
+                                 fact_type, or a rule's required investor
+                                 classification) is missing, not yet
+                                 verified, or has gone stale past its
+                                 fact_validity_days window.
+      review                   - no active rules are seeded for this
+                                 buyer/issuer jurisdiction + asset_type
+                                 combination, a seeded rule's requirement
+                                 is unmet with decision_if_unmet="review",
+                                 or the buyer's classification mismatches
+                                 a rule with decision_if_unmet="review".
+      eligible_pending_review  - every hard gate and every applicable
+                                 seeded rule (including classification
+                                 requirements) is currently satisfied.
+                                 Not a legal opinion - final legal/
+                                 compliance sign-off is still required.
+    """
+    if buyer.kyc_status != "verified":
+        return {
+            "status": "blocked",
+            "explanation": "Buyer KYC is not verified.",
+            "applicable_rule_codes": []
+        }
+
+    if not listing.is_transferable:
+        return {
+            "status": "blocked",
+            "explanation": "Listing is not confirmed transferable.",
+            "applicable_rule_codes": []
+        }
+
+    if buyer.jurisdiction is None:
+        return {
+            "status": "needs_evidence",
+            "explanation": (
+                "Buyer jurisdiction is not on file - no jurisdiction-"
+                "specific compliance rules can be evaluated until it is "
+                "recorded."
+            ),
+            "applicable_rule_codes": []
+        }
+
+    if listing.issuer_jurisdiction is None:
+        return {
+            "status": "needs_evidence",
+            "explanation": (
+                "Issuer jurisdiction is not on file - no jurisdiction-"
+                "specific compliance rules can be evaluated until it is "
+                "recorded."
+            ),
+            "applicable_rule_codes": []
+        }
+
+    applicable_rules = find_applicable_rules(buyer, listing, db)
+
+    if not applicable_rules:
+        return {
+            "status": "review",
+            "explanation": (
+                "No compliance rules are yet on file for this buyer "
+                "jurisdiction / issuer jurisdiction / asset type "
+                "combination - this combination hasn't been legally "
+                "researched/seeded into KEVO's rule set yet. Requires "
+                "direct legal review before any match can be treated as "
+                "eligible."
+            ),
+            "applicable_rule_codes": []
+        }
+
+    severity = {"blocked": 3, "missing_evidence": 2, "review": 1, "met": 0, "not_applicable": 0}
+
+    missing_evidence_rules = []
+    blocked_rules = []
+    review_rules = []
+    met_rules = []
+
+    for rule in applicable_rules:
+        value, evidenced, as_of_date = _resolve_compliance_fact(rule.fact_type, buyer, listing, db)
+
+        if rule.fact_validity_days is not None and evidenced:
+            if as_of_date is None:
+                evidenced = False
+            else:
+                expires_on = as_of_date + timedelta(days=rule.fact_validity_days)
+                if date.today() > expires_on:
+                    evidenced = False
+
+        if not evidenced:
+            primary_outcome = "missing_evidence"
+            primary_reason = f"{rule.fact_type} not yet evidenced or expired"
+        elif value == rule.requirement.strip().lower():
+            primary_outcome = "met"
+            primary_reason = None
+        elif rule.decision_if_unmet == "blocked":
+            primary_outcome = "blocked"
+            primary_reason = f"{rule.requirement} not met"
+        else:
+            primary_outcome = "review"
+            primary_reason = f"{rule.requirement} not met, requires legal judgment"
+
+        classification_outcome = _check_investor_classification(rule, buyer, db)
+
+        if classification_outcome == "not_applicable":
+            classification_reason = None
+        elif classification_outcome == "met":
+            classification_reason = None
+        elif classification_outcome == "missing_evidence":
+            classification_reason = (
+                f"investor classification not yet verified or expired "
+                f"(requires: {rule.investor_classification})"
+            )
+        else:
+            classification_reason = (
+                f"investor classification does not match required "
+                f"'{rule.investor_classification}'"
+            )
+
+        outcomes = [(primary_outcome, primary_reason)]
+        if classification_outcome != "not_applicable":
+            outcomes.append((classification_outcome, classification_reason))
+
+        worst_outcome = max(outcomes, key=lambda pair: severity[pair[0]])[0]
+        rule_reasons = [r for (_, r) in outcomes if r]
+
+        if worst_outcome == "blocked":
+            blocked_rules.append((rule, rule_reasons))
+        elif worst_outcome == "missing_evidence":
+            missing_evidence_rules.append((rule, rule_reasons))
+        elif worst_outcome == "review":
+            review_rules.append((rule, rule_reasons))
+        else:
+            met_rules.append((rule, rule_reasons))
+
+    rule_codes = [r.rule_code for r in applicable_rules]
+
+    if blocked_rules:
+        reasons = "; ".join(
+            f"{rule.rule_code}: {'; '.join(rule_reasons)} "
+            f"(source: {rule.source_reference or 'n/a'})"
+            for rule, rule_reasons in blocked_rules
+        )
+        return {
+            "status": "blocked",
+            "explanation": f"Blocked by: {reasons}",
+            "applicable_rule_codes": rule_codes
+        }
+
+    if missing_evidence_rules:
+        missing = ", ".join(
+            f"{'; '.join(rule_reasons)} ({rule.rule_code})"
+            for rule, rule_reasons in missing_evidence_rules
+        )
+        return {
+            "status": "needs_evidence",
+            "explanation": (
+                f"Cannot complete assessment - the following facts are "
+                f"missing, not yet verified, or have expired: {missing}."
+            ),
+            "applicable_rule_codes": rule_codes
+        }
+
+    if review_rules:
+        reasons = "; ".join(
+            f"{rule.rule_code}: {'; '.join(rule_reasons)} "
+            f"(source: {rule.source_reference or 'n/a'})"
+            for rule, rule_reasons in review_rules
+        )
+        return {
+            "status": "review",
+            "explanation": f"Requires human/legal review: {reasons}",
+            "applicable_rule_codes": rule_codes
+        }
+
+    citations = "; ".join(
+        f"{rule.rule_code} (source: {rule.source_reference or 'n/a'})" for rule, _ in met_rules
     )
+    return {
+        "status": "eligible_pending_review",
+        "explanation": (
+            f"All {len(met_rules)} applicable compliance requirement(s) "
+            f"are currently met: {citations}. This is KEVO's own rule "
+            "evaluation, not a legal opinion - final legal/compliance "
+            "sign-off is still required before this match can proceed."
+        ),
+        "applicable_rule_codes": rule_codes
+    }
 
-    evaluations = []
 
-    for rule in rules:
-        evaluations.append({
-            "rule_id": rule.id,
-            "rule_code": rule.rule_code,
-            "decision": rule.decision,
-            "requires_human_review": rule.requires_human_review,
-            "source_reference": rule.source_reference
-        })
-
-    return evaluations
-    
 def find_applicable_transferability_rules(listing, db):
     rules = db.query(TransferabilityRule).filter(
         TransferabilityRule.active == True
@@ -333,6 +567,14 @@ def evaluate_transferability(listing, db):
             )
             continue
 
+        if rule.expected_fact_value is not None and fact.fact_value != rule.expected_fact_value:
+            statuses.append(rule.decision_if_unmet)
+            reasons.append(
+                "Fact '" + rule.fact_type + "' for rule " + rule.rule_code + " has value '" + fact.fact_value +
+                "' but requires '" + rule.expected_fact_value + "'"
+            )
+            continue
+
         if rule.hold_period_days is not None:
             if fact.as_of_date is None:
                 statuses.append("needs_evidence")
@@ -396,11 +638,119 @@ def get_db():
     finally:
         db.close()
 
+
+# ---------------------------------------------------------------------------
+# M18 (first slice, 2026-09-12) - Authentication
+# Passwords are hashed with bcrypt (one-way, never stored or logged in plain
+# text). Sessions are stateless JSON Web Tokens (JWT), signed with a real
+# secret key generated for this project (SECRET_KEY in .env, never
+# committed). A token proves who is calling without KEVO needing to store a
+# session anywhere. This first slice protects the two endpoints the M10/M11
+# exposure investigation found open to any caller (GET /listings/{listing_id},
+# GET /users) - the rest of the API is deliberately left open for now and
+# rolled out in follow-up passes, per Eze's explicit scope choice, so this
+# stays a small, verifiable slice rather than one large, high-risk change
+# across every existing endpoint and test file.
+# ---------------------------------------------------------------------------
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+JWT_ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
+
+
+def hash_password(plain_password):
+    return bcrypt.hashpw(plain_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(plain_password, hashed_password):
+    return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
+
+
+def create_access_token(user_id):
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    payload = {"sub": str(user_id), "exp": expire}
+    return jwt.encode(payload, SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+
+def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"}
+    )
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        user_id = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+    except jwt.PyJWTError:
+        raise credentials_exception
+
+    user = db.query(UserModel).filter(UserModel.id == int(user_id)).first()
+    if user is None:
+        raise credentials_exception
+
+    return user
+
+
+@app.post("/login")
+def login(credentials: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(UserModel).filter(
+        UserModel.email == credentials.email
+    ).first()
+
+    if user is None or user.hashed_password is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect email or password"
+        )
+
+    if not verify_password(credentials.password, user.hashed_password):
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect email or password"
+        )
+
+    access_token = create_access_token(user.id)
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
+
+
+@app.post("/users/{user_id}/set-password")
+def set_password(
+    user_id: int,
+    request: SetPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.hashed_password is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Password already set for this user"
+        )
+
+    user.hashed_password = hash_password(request.password)
+    db.commit()
+
+    return {"message": "Password set successfully"}
+
+
 @app.get("/compliance-rules/matches/{buyer_id}/{listing_id}")
 def get_applicable_compliance_rules(
     buyer_id: int,
     listing_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     buyer = db.query(UserModel).filter(
         UserModel.id == buyer_id
@@ -422,23 +772,21 @@ def get_applicable_compliance_rules(
             detail="Listing not found"
         )
 
-    evaluations = evaluate_compliance_rules(
-        buyer,
-        listing,
-        db
-    )
+    result = assess_compliance(buyer, listing, db)
 
     return {
         "buyer_id": buyer.id,
         "listing_id": listing.id,
-        "evaluated_rules": evaluations
- 
+        "status": result["status"],
+        "explanation": result["explanation"],
+        "applicable_rule_codes": result["applicable_rule_codes"]
     }
     
 @app.get("/transferability/listing/{listing_id}")
 def get_transferability_assessment(
     listing_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     listing = db.query(ListingModel).filter(
         ListingModel.id == listing_id
@@ -452,23 +800,8 @@ def get_transferability_assessment(
 
     result = evaluate_transferability(listing, db)
 
-    explanation = "; ".join(result["reasons"])
-
-    assessment = TransferabilityAssessment(
-        listing_id=listing.id,
-        status=result["status"],
-        explanation=explanation,
-        path_to_eligibility=result["path_to_eligibility"],
-        forecast_date=result["forecast_date"]
-    )
-
-    db.add(assessment)
-    db.commit()
-    db.refresh(assessment)
-
     return {
         "listing_id": listing.id,
-        "assessment_id": assessment.id,
         "status": result["status"],
         "reasons": result["reasons"],
         "applicable_rule_count": result["applicable_rule_count"],
@@ -479,7 +812,8 @@ def get_transferability_assessment(
 @app.get("/transferability/matrix")
 def get_transferability_matrix(
     asset_type: str = "Private Shares",
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     rules = db.query(TransferabilityRule).filter(
         TransferabilityRule.asset_type == asset_type,
@@ -528,8 +862,10 @@ def create_user(
     new_user = UserModel(
         name=user.name,
         email=user.email,
+        hashed_password=hash_password(user.password),
         role=user.role,
-        seller_affiliate_status=user.seller_affiliate_status
+        seller_affiliate_status=user.seller_affiliate_status,
+        jurisdiction=user.jurisdiction
     )
 
     db.add(new_user)
@@ -543,45 +879,82 @@ def create_user(
             "name": new_user.name,
             "email": new_user.email,
             "role": new_user.role,
-            "seller_affiliate_status": new_user.seller_affiliate_status
+            "seller_affiliate_status": new_user.seller_affiliate_status,
+            "jurisdiction": new_user.jurisdiction
         }
     }
 
 
 @app.get("/users")
-def get_users(db: Session = Depends(get_db)):
+def get_users(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
     users = db.query(UserModel).all()
 
     return [
         {
             "id": user.id,
-            "name": user.name,
-            "email": user.email,
             "role": user.role
         }
         for user in users
     ]
 
 
+@app.put("/users/{user_id}/kyc-status")
+def update_kyc_status(
+    user_id: int,
+    status: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only an admin can update KYC status"
+        )
+
+    user = db.query(UserModel).filter(
+        UserModel.id == user_id
+    ).first()
+
+    if user is None:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found"
+        )
+
+    if status not in ["verified", "rejected"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Status must be verified or rejected"
+        )
+
+    user.kyc_status = status
+
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "message": "KYC status updated",
+        "user": {
+            "id": user.id,
+            "role": user.role,
+            "kyc_status": user.kyc_status
+        }
+    }
+
+
 @app.post("/ownership")
 def create_ownership(
     ownership: OwnershipCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
-    seller = db.query(UserModel).filter(
-        UserModel.id == ownership.seller_id
-    ).first()
-
-    if seller is None:
+    if current_user.id != ownership.seller_id:
         raise HTTPException(
-            status_code=404,
-            detail="Seller not found"
-        )
-
-    if seller.role != "seller":
-        raise HTTPException(
-            status_code=400,
-            detail="User is not a seller"
+            status_code=403,
+            detail="You can only create ownership records for yourself"
         )
 
     new_ownership = OwnershipRecord(
@@ -614,8 +987,16 @@ def create_ownership(
 @app.post("/transactions")
 def create_transaction(
     transaction: TransactionCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
+    # INVARIANT (2026-09-09): agreed_price MUST remain a value the caller
+    # supplies, reflecting terms two humans already agreed to off-platform.
+    # KEVO's own logic must never set, suggest, derive, or default this
+    # value from a listing's asking_price, a buyer interest's
+    # maximum_price, a demand-heatmap/curve figure, or any other
+    # KEVO-computed number. Do not add a default, a suggestion, or an
+    # auto-fill for agreed_price here.
     listing = db.query(ListingModel).filter(
         ListingModel.id == transaction.listing_id
     ).first()
@@ -636,11 +1017,6 @@ def create_transaction(
             detail="Seller not found"
         )
 
-    if seller.role != "seller":
-        raise HTTPException(
-            status_code=400,
-            detail="User is not a seller"
-        )
     buyer = db.query(UserModel).filter(
         UserModel.id == transaction.buyer_id
     ).first()
@@ -651,10 +1027,10 @@ def create_transaction(
             detail="Buyer not found"
         )
 
-    if buyer.role != "buyer":
+    if current_user.id not in (buyer.id, seller.id):
         raise HTTPException(
-            status_code=400,
-            detail="User is not a buyer"
+            status_code=403,
+            detail="You must be a party to this transaction to create it"
         )
     if buyer.id == seller.id:
         raise HTTPException(
@@ -666,7 +1042,13 @@ def create_transaction(
             status_code=400,
             detail="Agreed price must be greater than zero"
         )
-    if transaction.quantity > listing.quantity:
+    committed_transactions = db.query(Transaction).filter(
+        Transaction.listing_id == transaction.listing_id,
+        Transaction.status.in_(["accepted", "settlement_pending", "completed"])
+    ).all()
+    committed_quantity = sum(t.quantity for t in committed_transactions)
+
+    if transaction.quantity + committed_quantity > listing.quantity:
         raise HTTPException(
             status_code=400,
             detail="Not enough quantity available"
@@ -696,6 +1078,64 @@ def create_transaction(
             "agreed_price": new_transaction.agreed_price,
             "status": new_transaction.status
         }
+    }
+
+
+@app.get("/transactions")
+def get_transactions(db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
+    if current_user.account_type == "admin":
+        transactions = db.query(Transaction).all()
+    else:
+        transactions = db.query(Transaction).filter(
+            (Transaction.buyer_id == current_user.id) | (Transaction.seller_id == current_user.id)
+        ).all()
+
+    return [
+        {
+            "id": t.id,
+            "listing_id": t.listing_id,
+            "buyer_id": t.buyer_id,
+            "seller_id": t.seller_id,
+            "quantity": t.quantity,
+            "agreed_price": t.agreed_price,
+            "status": t.status
+        }
+        for t in transactions
+    ]
+
+
+@app.get("/transactions/{transaction_id}")
+def get_transaction(
+    transaction_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    transaction = db.query(Transaction).filter(
+        Transaction.id == transaction_id
+    ).first()
+
+    if transaction is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Transaction not found"
+        )
+
+    if current_user.account_type != "admin" and current_user.id not in (transaction.buyer_id, transaction.seller_id):
+        raise HTTPException(
+            status_code=403,
+            detail="You are not a party to this transaction"
+        )
+
+    return {
+        "transaction": {
+            "id": transaction.id,
+            "listing_id": transaction.listing_id,
+            "buyer_id": transaction.buyer_id,
+            "seller_id": transaction.seller_id,
+            "quantity": transaction.quantity,
+            "agreed_price": transaction.agreed_price,
+            "status": transaction.status
+        }
     }      
 
 
@@ -704,8 +1144,15 @@ def verify_ownership(
     ownership_id: int,
     status: str,
     verification_reference: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
+    if current_user.account_type != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only an admin can verify ownership records"
+        )
+
     ownership = db.query(OwnershipRecord).filter(
         OwnershipRecord.id == ownership_id
     ).first()
@@ -732,6 +1179,7 @@ def verify_ownership(
         "message": "Ownership verification updated",
         "ownership": {
             "id": ownership.id,
+            "listing_id": ownership.listing_id,
             "seller_id": ownership.seller_id,
             "company": ownership.company,
             "asset_type": ownership.asset_type,
@@ -746,22 +1194,13 @@ def verify_ownership(
 @app.post("/listings")
 def create_listing(
     listing: ListingCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
-    seller = db.query(UserModel).filter(
-        UserModel.id == listing.seller_id
-    ).first()
-
-    if seller is None:
+    if current_user.id != listing.seller_id:
         raise HTTPException(
-            status_code=404,
-            detail="Seller not found"
-        )
-
-    if seller.role != "seller":
-        raise HTTPException(
-            status_code=400,
-            detail="User is not a seller"
+            status_code=403,
+            detail="You can only create listings for yourself"
         )
 
     new_listing = ListingModel(
@@ -798,7 +1237,7 @@ def create_listing(
 
 
 @app.get("/listings")
-def get_listings(db: Session = Depends(get_db)):
+def get_listings(db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
     listings = db.query(ListingModel).all()
 
     return [
@@ -817,7 +1256,8 @@ def get_listings(db: Session = Depends(get_db)):
 @app.get("/listings/{listing_id}")
 def get_listing(
     listing_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     listing = db.query(ListingModel).filter(
         ListingModel.id == listing_id
@@ -843,8 +1283,6 @@ def get_listing(
         },
         "seller": {
             "id": seller.id,
-            "name": seller.name,
-            "email": seller.email,
             "role": seller.role
         }
     }
@@ -852,7 +1290,8 @@ def get_listing(
 def update_listing(
     listing_id: int,
     listing_data: ListingCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     listing = db.query(ListingModel).filter(
         ListingModel.id == listing_id
@@ -864,20 +1303,16 @@ def update_listing(
             detail="Listing not found"
         )
 
-    seller = db.query(UserModel).filter(
-        UserModel.id == listing_data.seller_id
-    ).first()
-
-    if seller is None:
+    if current_user.id != listing.seller_id:
         raise HTTPException(
-            status_code=404,
-            detail="Seller not found"
+            status_code=403,
+            detail="You can only modify your own listings"
         )
 
-    if seller.role != "seller":
+    if listing_data.seller_id != current_user.id:
         raise HTTPException(
-            status_code=400,
-            detail="User is not a seller"
+            status_code=403,
+            detail="You cannot reassign a listing to another user"
         )
 
     listing.seller_id = listing_data.seller_id
@@ -885,6 +1320,10 @@ def update_listing(
     listing.asset_type = listing_data.asset_type
     listing.quantity = listing_data.quantity
     listing.asking_price = listing_data.asking_price
+    listing.issuer_reporting_status = listing_data.issuer_reporting_status
+    listing.issuer_current_information_available = listing_data.issuer_current_information_available
+    listing.issuer_jurisdiction = listing_data.issuer_jurisdiction
+    listing.is_transferable = listing_data.is_transferable if listing_data.is_transferable is not None else False
 
     db.commit()
     db.refresh(listing)
@@ -897,7 +1336,11 @@ def update_listing(
             "company": listing.company,
             "asset_type": listing.asset_type,
             "quantity": listing.quantity,
-            "asking_price": float(listing.asking_price)
+            "asking_price": float(listing.asking_price),
+            "issuer_reporting_status": listing.issuer_reporting_status,
+            "issuer_current_information_available": listing.issuer_current_information_available,
+            "issuer_jurisdiction": listing.issuer_jurisdiction,
+            "is_transferable": listing.is_transferable
         }
     }
 
@@ -905,7 +1348,8 @@ def update_listing(
 @app.delete("/listings/{listing_id}")
 def delete_listing(
     listing_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     listing = db.query(ListingModel).filter(
         ListingModel.id == listing_id
@@ -917,6 +1361,12 @@ def delete_listing(
             detail="Listing not found"
         )
 
+    if current_user.id != listing.seller_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only delete your own listings"
+        )
+
     db.delete(listing)
     db.commit()
 
@@ -924,47 +1374,13 @@ def delete_listing(
         "message": "Listing deleted",
         "listing_id": listing_id
     }
-@app.post("/ownership/{ownership_id}/verify")
-def verify_ownership(
-    ownership_id: int,
-    verification_reference: str,
-    db: Session = Depends(get_db)
-):
-    ownership = db.query(OwnershipRecord).filter(
-        OwnershipRecord.id == ownership_id
-    ).first()
-
-    if ownership is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Ownership record not found"
-        )
-
-    ownership.verification_status = "verified"
-    ownership.verification_reference = verification_reference
-
-    db.commit()
-    db.refresh(ownership)
-
-    return {
-        "message": "Ownership verified",
-        "ownership": {
-            "id": ownership.id,
-            "listing_id": ownership.listing_id,
-            "seller_id": ownership.seller_id,
-            "company": ownership.company,
-            "asset_type": ownership.asset_type,
-            "quantity": ownership.quantity,
-            "verification_status": ownership.verification_status,
-            "verification_reference": ownership.verification_reference
-        }
-    }
 
 @app.patch("/transactions/{transaction_id}/status")
 def update_transaction_status(
     transaction_id: int,
     status: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     transaction = db.query(Transaction).filter(
         Transaction.id == transaction_id
@@ -974,6 +1390,16 @@ def update_transaction_status(
         raise HTTPException(
             status_code=404,
             detail="Transaction not found"
+        )
+
+    is_admin = current_user.account_type == "admin"
+    is_buyer = current_user.id == transaction.buyer_id
+    is_seller = current_user.id == transaction.seller_id
+
+    if not (is_admin or is_buyer or is_seller):
+        raise HTTPException(
+            status_code=403,
+            detail="You are not a party to this transaction"
         )
 
     allowed_statuses = [
@@ -1005,6 +1431,18 @@ def update_transaction_status(
             status_code=400,
             detail=f"Cannot change transaction status from {transaction.status} to {status}"
         )
+
+    # Lifecycle permission: accepting or rejecting is the seller's call
+    # (responding to a stated buyer interest); cancelling stays open to
+    # either party. Deliberately minimal for M19 - full negotiation
+    # mechanics belong to the not-yet-built M25.
+    seller_only_transitions = {"accepted", "rejected"}
+    if status in seller_only_transitions and not (is_seller or is_admin):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the seller can accept or reject a transaction"
+        )
+
     transaction.status = status
 
     db.commit()
@@ -1026,22 +1464,13 @@ def update_transaction_status(
 @app.post("/buyer-interests")
 def create_buyer_interest(
     interest: BuyerInterestCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
-    buyer = db.query(UserModel).filter(
-        UserModel.id == interest.buyer_id
-    ).first()
-
-    if buyer is None:
+    if current_user.id != interest.buyer_id:
         raise HTTPException(
-            status_code=404,
-            detail="Buyer not found"
-        )
-
-    if buyer.role != "buyer":
-        raise HTTPException(
-            status_code=400,
-            detail="User is not a buyer"
+            status_code=403,
+            detail="You can only create buyer interests for yourself"
         )
 
     new_interest = BuyerInterest(
@@ -1067,11 +1496,70 @@ def create_buyer_interest(
             "maximum_price": float(new_interest.maximum_price),
             "status": new_interest.status
         }
+    }
+
+
+@app.get("/buyer-interests")
+def get_buyer_interests(db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
+    if current_user.account_type == "admin":
+        interests = db.query(BuyerInterest).all()
+    else:
+        interests = db.query(BuyerInterest).filter(
+            BuyerInterest.buyer_id == current_user.id
+        ).all()
+
+    return [
+        {
+            "id": i.id,
+            "buyer_id": i.buyer_id,
+            "company": i.company,
+            "asset_type": i.asset_type,
+            "desired_quantity": i.desired_quantity,
+            "maximum_price": float(i.maximum_price),
+            "status": i.status
+        }
+        for i in interests
+    ]
+
+
+@app.get("/buyer-interests/{interest_id}")
+def get_buyer_interest(
+    interest_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    interest = db.query(BuyerInterest).filter(
+        BuyerInterest.id == interest_id
+    ).first()
+
+    if interest is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Buyer interest not found"
+        )
+
+    if current_user.account_type != "admin" and current_user.id != interest.buyer_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only view your own buyer interests"
+        )
+
+    return {
+        "buyer_interest": {
+            "id": interest.id,
+            "buyer_id": interest.buyer_id,
+            "company": interest.company,
+            "asset_type": interest.asset_type,
+            "desired_quantity": interest.desired_quantity,
+            "maximum_price": float(interest.maximum_price),
+            "status": interest.status
+        }
     }    
 @app.post("/investor-eligibility")
 def create_investor_eligibility(
     eligibility: InvestorEligibilityCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     buyer = db.query(UserModel).filter(
         UserModel.id == eligibility.buyer_id
@@ -1083,10 +1571,18 @@ def create_investor_eligibility(
             detail="Buyer not found"
         )
 
-    if buyer.role != "buyer":
+    is_admin = current_user.account_type == "admin"
+
+    if not is_admin and current_user.id != eligibility.buyer_id:
         raise HTTPException(
-            status_code=400,
-            detail="User is not a buyer"
+            status_code=403,
+            detail="You can only submit eligibility records for yourself"
+        )
+
+    if not is_admin and eligibility.status == "verified":
+        raise HTTPException(
+            status_code=403,
+            detail="Only an admin can mark investor eligibility as verified"
         )
 
     new_eligibility = InvestorEligibility(
@@ -1120,11 +1616,191 @@ def create_investor_eligibility(
             "jurisdiction": new_eligibility.jurisdiction
         }
     }
+
+
+@app.get("/investor-eligibility")
+def get_investor_eligibility_records(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type == "admin":
+        records = db.query(InvestorEligibility).all()
+    else:
+        records = db.query(InvestorEligibility).filter(
+            InvestorEligibility.buyer_id == current_user.id
+        ).all()
+
+    return [
+        {
+            "id": r.id,
+            "buyer_id": r.buyer_id,
+            "investor_type": r.investor_type,
+            "classification": r.classification,
+            "status": r.status,
+            "verification_method": r.verification_method,
+            "evidence_reference": r.evidence_reference,
+            "effective_date": r.effective_date,
+            "review_date": r.review_date,
+            "jurisdiction": r.jurisdiction
+        }
+        for r in records
+    ]
+
+
+@app.get("/investor-eligibility/{eligibility_id}")
+def get_investor_eligibility_record(
+    eligibility_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    record = db.query(InvestorEligibility).filter(
+        InvestorEligibility.id == eligibility_id
+    ).first()
+
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Investor eligibility record not found"
+        )
+
+    if current_user.account_type != "admin" and current_user.id != record.buyer_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only view your own investor eligibility records"
+        )
+
+    return {
+        "investor_eligibility": {
+            "id": record.id,
+            "buyer_id": record.buyer_id,
+            "investor_type": record.investor_type,
+            "classification": record.classification,
+            "status": record.status,
+            "verification_method": record.verification_method,
+            "evidence_reference": record.evidence_reference,
+            "effective_date": record.effective_date,
+            "review_date": record.review_date,
+            "jurisdiction": record.jurisdiction
+        }
+    }
+
+
+@app.post("/kyc-facts")
+def create_kyc_fact(
+    fact: KYCFactCreate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    user = db.query(UserModel).filter(
+        UserModel.id == fact.user_id
+    ).first()
+
+    if user is None:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found"
+        )
+
+    is_admin = current_user.account_type == "admin"
+
+    if not is_admin and current_user.id != fact.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only submit KYC facts for yourself"
+        )
+
+    new_fact = KYCFact(
+        user_id=fact.user_id,
+        jurisdiction=fact.jurisdiction,
+        fact_type=fact.fact_type,
+        fact_value=fact.fact_value,
+        as_of_date=fact.as_of_date,
+        evidence_id=fact.evidence_id,
+        source_reference=fact.source_reference
+    )
+
+    db.add(new_fact)
+    db.commit()
+    db.refresh(new_fact)
+
+    return {
+        "message": "KYC fact created",
+        "kyc_fact": {
+            "id": new_fact.id,
+            "user_id": new_fact.user_id,
+            "jurisdiction": new_fact.jurisdiction,
+            "fact_type": new_fact.fact_type,
+            "fact_value": new_fact.fact_value,
+            "as_of_date": new_fact.as_of_date,
+            "verification_status": new_fact.verification_status,
+            "evidence_id": new_fact.evidence_id,
+            "source_reference": new_fact.source_reference
+        }
+    }
+
+
+@app.put("/kyc-facts/{fact_id}/verify")
+def verify_kyc_fact(
+    fact_id: int,
+    status: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only an admin can verify KYC facts"
+        )
+
+    fact = db.query(KYCFact).filter(
+        KYCFact.id == fact_id
+    ).first()
+
+    if fact is None:
+        raise HTTPException(
+            status_code=404,
+            detail="KYC fact not found"
+        )
+
+    if status not in ["verified", "rejected"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Status must be verified or rejected"
+        )
+
+    fact.verification_status = status
+
+    db.commit()
+    db.refresh(fact)
+
+    return {
+        "message": "KYC fact verification updated",
+        "kyc_fact": {
+            "id": fact.id,
+            "user_id": fact.user_id,
+            "jurisdiction": fact.jurisdiction,
+            "fact_type": fact.fact_type,
+            "fact_value": fact.fact_value,
+            "as_of_date": fact.as_of_date,
+            "verification_status": fact.verification_status,
+            "evidence_id": fact.evidence_id,
+            "source_reference": fact.source_reference
+        }
+    }
+
+
 @app.post("/compliance-rules")
 def create_compliance_rule(
     rule: ComplianceRuleCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
+    if current_user.account_type != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only an admin can create compliance rules"
+        )
+
     existing_rule = db.query(ComplianceRule).filter(
         ComplianceRule.rule_code == rule.rule_code
     ).first()
@@ -1142,7 +1818,9 @@ def create_compliance_rule(
         investor_classification=rule.investor_classification,
         rule_code=rule.rule_code,
         description=rule.description,
-        decision=rule.decision,
+        fact_type=rule.fact_type,
+        requirement=rule.requirement,
+        decision_if_unmet=rule.decision_if_unmet,
         requires_human_review=rule.requires_human_review,
         active=rule.active,
         source_reference=rule.source_reference
@@ -1162,7 +1840,9 @@ def create_compliance_rule(
             "investor_classification": new_rule.investor_classification,
             "rule_code": new_rule.rule_code,
             "description": new_rule.description,
-            "decision": new_rule.decision,
+            "fact_type": new_rule.fact_type,
+            "requirement": new_rule.requirement,
+            "decision_if_unmet": new_rule.decision_if_unmet,
             "requires_human_review": new_rule.requires_human_review,
             "active": new_rule.active,
             "source_reference": new_rule.source_reference
@@ -1170,7 +1850,8 @@ def create_compliance_rule(
     }
 @app.get("/compliance-rules")
 def get_compliance_rules(
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     rules = db.query(ComplianceRule).all()
 
@@ -1183,7 +1864,9 @@ def get_compliance_rules(
             "investor_classification": rule.investor_classification,
             "rule_code": rule.rule_code,
             "description": rule.description,
-            "decision": rule.decision,
+            "fact_type": rule.fact_type,
+            "requirement": rule.requirement,
+            "decision_if_unmet": rule.decision_if_unmet,
             "requires_human_review": rule.requires_human_review,
             "active": rule.active,
             "source_reference": rule.source_reference
@@ -1195,7 +1878,8 @@ def get_compliance_rules(
 @app.get("/buyer-interests/{interest_id}/matches")
 def find_matches(
     interest_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     interest = db.query(BuyerInterest).filter(
         BuyerInterest.id == interest_id
@@ -1205,6 +1889,12 @@ def find_matches(
         raise HTTPException(
             status_code=404,
             detail="Buyer interest not found"
+        )
+
+    if current_user.account_type != "admin" and current_user.id != interest.buyer_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only view matches for your own buyer interest"
         )
 
     buyer = db.query(UserModel).filter(
@@ -1226,14 +1916,7 @@ def find_matches(
     compliance_results = []
 
     for listing in matches:
-        compliance = check_compliance(buyer, listing, db)
-
-        if compliance["status"] == "blocked":
-            match_status = "blocked"
-        elif compliance["status"] == "review":
-            match_status = "review"
-        else:
-            match_status = "eligible"
+        compliance = assess_compliance(buyer, listing, db)
 
         compliance_results.append({
             "listing_id": listing.id,
@@ -1243,9 +1926,9 @@ def find_matches(
             "quantity": listing.quantity,
             "asking_price": float(listing.asking_price),
             "compliance_status": compliance["status"],
-            "compliance_reasons": compliance["reasons"],
-            "compliance_checks": compliance["checks"],
-            "match_status": match_status
+            "compliance_explanation": compliance["explanation"],
+            "compliance_applicable_rule_codes": compliance["applicable_rule_codes"],
+            "match_status": compliance["status"]
         })
     return {
         "buyer_interest_id": interest.id,
@@ -1319,7 +2002,8 @@ def build_position_passport(listing, db):
 @app.get("/passport/listing/{listing_id}")
 def get_position_passport(
     listing_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     listing = db.query(ListingModel).filter(
         ListingModel.id == listing_id
@@ -1451,7 +2135,8 @@ def build_position_events(listing, db):
 @app.get("/position-events/listing/{listing_id}")
 def get_position_events(
     listing_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     listing = db.query(ListingModel).filter(
         ListingModel.id == listing_id
@@ -1912,7 +2597,8 @@ def evaluate_offering_exemptions(offering, db):
 @app.get("/offering-exemptions/{offering_id}")
 def get_offering_exemptions(
     offering_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
     offering = db.query(Offering).filter(
         Offering.id == offering_id
@@ -1926,20 +2612,1201 @@ def get_offering_exemptions(
 
     assessments = evaluate_offering_exemptions(offering, db)
 
-    for a in assessments:
-        record = OfferingExemptionAssessment(
-            offering_id=offering.id,
-            exemption_code=a["exemption_code"],
-            status=a["status"],
-            reasons="; ".join(a["reasons"]),
-            assessed_at=date.today()
-        )
-        db.add(record)
-
-    db.commit()
-
     return {
         "offering_id": offering.id,
         "assessments": assessments
     }
 
+
+
+def build_liquidity_path(listing, db, transaction_id=None):
+    steps = []
+
+    ownership_record = db.query(OwnershipRecord).filter(
+        OwnershipRecord.listing_id == listing.id
+    ).first()
+
+    if ownership_record is None:
+        steps.append({
+            "step_type": "OWNERSHIP_VERIFICATION",
+            "sequence_position": 1,
+            "required": True,
+            "complete": False,
+            "evidence_reference_type": None,
+            "evidence_reference_id": None,
+            "responsible_party": "holder",
+            "completion_trigger": "Holder submits ownership evidence and KEVO verifies it",
+            "determinability": "known_incomplete",
+            "reasons": "No ownership record on file for this listing",
+            "source_milestone": "M4/M5"
+        })
+    else:
+        ownership_complete = ownership_record.verification_status == "verified"
+        steps.append({
+            "step_type": "OWNERSHIP_VERIFICATION",
+            "sequence_position": 1,
+            "required": True,
+            "complete": ownership_complete,
+            "evidence_reference_type": "OwnershipRecord",
+            "evidence_reference_id": ownership_record.id,
+            "responsible_party": "kevo",
+            "completion_trigger": "KEVO marks the ownership record's verification_status as 'verified'",
+            "determinability": "known_complete" if ownership_complete else "known_incomplete",
+            "reasons": "Ownership record verification_status is '" + ownership_record.verification_status + "'",
+            "source_milestone": "M4/M5"
+        })
+
+    transferability_result = evaluate_transferability(listing, db)
+    transferability_status = transferability_result["status"]
+    transferability_complete = transferability_status == "eligible_pending_review"
+
+    if transferability_status == "conflict" or transferability_status == "review":
+        transferability_determinability = "cannot_determine"
+    elif transferability_complete:
+        transferability_determinability = "known_complete"
+    else:
+        transferability_determinability = "known_incomplete"
+
+    steps.append({
+        "step_type": "TRANSFERABILITY_CLEARANCE",
+        "sequence_position": 2,
+        "required": True,
+        "complete": transferability_complete,
+        "evidence_reference_type": "TransferabilityFact",
+        "evidence_reference_id": None,
+        "responsible_party": "kevo",
+        "completion_trigger": "All applicable transferability facts become verified and consistent",
+        "determinability": transferability_determinability,
+        "reasons": "; ".join(transferability_result["reasons"]),
+        "source_milestone": "M14"
+    })
+
+    evidence_query = db.query(Evidence).filter(
+        Evidence.listing_id == listing.id
+    )
+    evidence_verified_count = evidence_query.filter(
+        Evidence.verification_status == "verified"
+    ).count()
+    evidence_pending_count = evidence_query.filter(
+        Evidence.verification_status != "verified"
+    ).count()
+
+    steps.append({
+        "step_type": "DOCUMENTATION_COMPLETE",
+        "sequence_position": 3,
+        "required": None,
+        "complete": False,
+        "evidence_reference_type": "Evidence",
+        "evidence_reference_id": None,
+        "responsible_party": "holder",
+        "completion_trigger": "KEVO builds a per-jurisdiction required-document registry (M23) and every required document is verified",
+        "determinability": "required_but_unverified",
+        "reasons": str(evidence_verified_count) + " verified and " + str(evidence_pending_count) + " pending evidence record(s) on file — KEVO cannot yet confirm this is the complete required set, no document registry exists yet (M23)",
+        "source_milestone": "M23 (not yet built)"
+    })
+
+    applicable_rules = find_applicable_transferability_rules(listing, db)
+    rofr_rule = None
+    for rule in applicable_rules:
+        if rule.rule_code == "ZA-COMPANIES-S8-ROFR-CONSENT":
+            rofr_rule = rule
+
+    if rofr_rule is None:
+        steps.append({
+            "step_type": "ISSUER_APPROVAL_ROFR",
+            "sequence_position": 4,
+            "required": None,
+            "complete": False,
+            "evidence_reference_type": None,
+            "evidence_reference_id": None,
+            "responsible_party": "issuer",
+            "completion_trigger": "M25 builds real ROFR/consent detection for this listing's jurisdiction",
+            "determinability": "cannot_determine",
+            "reasons": "No ROFR/consent rule is currently encoded for this listing's jurisdiction and asset type — this does not mean no ROFR applies, only that KEVO cannot yet tell",
+            "source_milestone": "M25 (not yet built)"
+        })
+    else:
+        rofr_facts = db.query(TransferabilityFact).filter(
+            TransferabilityFact.listing_id == listing.id,
+            TransferabilityFact.fact_type == rofr_rule.fact_type,
+            TransferabilityFact.superseded_by_id.is_(None)
+        ).all()
+        rofr_verified_facts = [f for f in rofr_facts if f.verification_status == "verified"]
+
+        if rofr_verified_facts:
+            rofr_fact = rofr_verified_facts[0]
+            steps.append({
+                "step_type": "ISSUER_APPROVAL_ROFR",
+                "sequence_position": 4,
+                "required": True,
+                "complete": True,
+                "evidence_reference_type": "TransferabilityFact",
+                "evidence_reference_id": rofr_fact.id,
+                "responsible_party": "issuer",
+                "completion_trigger": "Already resolved by a verified fact",
+                "determinability": "known_complete",
+                "reasons": "Verified fact on file for rule " + rofr_rule.rule_code,
+                "source_milestone": "M14"
+            })
+        else:
+            steps.append({
+                "step_type": "ISSUER_APPROVAL_ROFR",
+                "sequence_position": 4,
+                "required": True,
+                "complete": False,
+                "evidence_reference_type": "TransferabilityRule",
+                "evidence_reference_id": rofr_rule.id,
+                "responsible_party": "issuer",
+                "completion_trigger": "Issuer/company secretary confirms ROFR waiver or consent, and KEVO verifies the fact",
+                "determinability": "required_but_unverified",
+                "reasons": "Rule " + rofr_rule.rule_code + " applies but no verified fact is on file yet",
+                "source_milestone": "M14"
+            })
+
+    if transaction_id is not None:
+        transaction = db.query(Transaction).filter(
+            Transaction.id == transaction_id,
+            Transaction.listing_id == listing.id
+        ).first()
+    else:
+        transaction = db.query(Transaction).filter(
+            Transaction.listing_id == listing.id
+        ).order_by(Transaction.id.desc()).first()
+
+    if transaction is None:
+        steps.append({
+            "step_type": "BUYER_ELIGIBILITY_COMPLIANCE",
+            "sequence_position": 5,
+            "required": True,
+            "complete": False,
+            "evidence_reference_type": None,
+            "evidence_reference_id": None,
+            "responsible_party": "buyer",
+            "completion_trigger": "A candidate buyer is identified and passes KEVO's compliance rule evaluation",
+            "determinability": "required_but_unverified",
+            "reasons": "No candidate buyer identified yet for this listing — compliance rules (M13) are ready to evaluate one as soon as a buyer exists",
+            "source_milestone": "M13"
+        })
+    else:
+        candidate_buyer = db.query(UserModel).filter(
+            UserModel.id == transaction.buyer_id
+        ).first()
+
+        compliance_result = assess_compliance(candidate_buyer, listing, db)
+        compliance_status = compliance_result["status"]
+        compliance_complete = compliance_status == "eligible_pending_review"
+
+        if compliance_status == "review":
+            compliance_determinability = "cannot_determine"
+        elif compliance_complete:
+            compliance_determinability = "known_complete"
+        else:
+            compliance_determinability = "known_incomplete"
+
+        steps.append({
+            "step_type": "BUYER_ELIGIBILITY_COMPLIANCE",
+            "sequence_position": 5,
+            "required": True,
+            "complete": compliance_complete,
+            "evidence_reference_type": "Transaction",
+            "evidence_reference_id": transaction.id,
+            "responsible_party": "buyer",
+            "completion_trigger": "Candidate buyer passes KEVO's compliance rule evaluation (M13)",
+            "determinability": compliance_determinability,
+            "reasons": "Buyer " + str(candidate_buyer.id) + " compliance status: " + compliance_status + " - " + compliance_result["explanation"],
+            "source_milestone": "M13"
+        })
+
+    interest_match_count = db.query(BuyerInterest).filter(
+        BuyerInterest.company == listing.company,
+        BuyerInterest.asset_type == listing.asset_type,
+        BuyerInterest.status == "active",
+        BuyerInterest.maximum_price >= listing.asking_price,
+        BuyerInterest.desired_quantity <= listing.quantity
+    ).count()
+
+    matching_complete = interest_match_count > 0
+
+    steps.append({
+        "step_type": "BUYER_MATCHING",
+        "sequence_position": 6,
+        "required": True,
+        "complete": matching_complete,
+        "evidence_reference_type": "BuyerInterest",
+        "evidence_reference_id": None,
+        "responsible_party": "kevo",
+        "completion_trigger": "At least one buyer interest matching this listing's terms exists",
+        "determinability": "known_complete" if matching_complete else "known_incomplete",
+        "reasons": str(interest_match_count) + " buyer interest(s) currently match this listing's company, asset type, price, and quantity",
+        "source_milestone": "M9-M11"
+    })
+
+    if transaction is not None and transaction.status in ("accepted", "settlement_pending", "completed"):
+        steps.append({
+            "step_type": "NEGOTIATION_PRICE_AGREEMENT",
+            "sequence_position": 7,
+            "required": True,
+            "complete": True,
+            "evidence_reference_type": "Transaction",
+            "evidence_reference_id": transaction.id,
+            "responsible_party": "holder",
+            "completion_trigger": "Already resolved by an existing transaction record",
+            "determinability": "known_complete",
+            "reasons": "Transaction " + str(transaction.id) + " has status '" + transaction.status + "' with an agreed price of " + str(transaction.agreed_price),
+            "source_milestone": "Transaction table (built); full negotiation workflow is M25 (not yet built)"
+        })
+    elif transaction is not None:
+        steps.append({
+            "step_type": "NEGOTIATION_PRICE_AGREEMENT",
+            "sequence_position": 7,
+            "required": True,
+            "complete": False,
+            "evidence_reference_type": "Transaction",
+            "evidence_reference_id": transaction.id,
+            "responsible_party": "holder",
+            "completion_trigger": "Holder and buyer agree a price, recorded as a Transaction",
+            "determinability": "known_incomplete",
+            "reasons": "Transaction " + str(transaction.id) + "'s current status is '" + transaction.status + "' — this does not represent an agreed price",
+            "source_milestone": "Transaction table (built); full negotiation workflow is M25 (not yet built)"
+        })
+    else:
+        steps.append({
+            "step_type": "NEGOTIATION_PRICE_AGREEMENT",
+            "sequence_position": 7,
+            "required": True,
+            "complete": False,
+            "evidence_reference_type": None,
+            "evidence_reference_id": None,
+            "responsible_party": "holder",
+            "completion_trigger": "Holder and buyer agree a price, recorded as a Transaction",
+            "determinability": "known_incomplete",
+            "reasons": "No transaction record exists for this listing yet — no negotiation has taken place",
+            "source_milestone": "Transaction table (built); full negotiation workflow is M25 (not yet built)"
+        })
+
+    steps.append({
+        "step_type": "SETTLEMENT",
+        "sequence_position": 8,
+        "required": True,
+        "complete": False,
+        "evidence_reference_type": None,
+        "evidence_reference_id": None,
+        "responsible_party": "third_party",
+        "completion_trigger": "M26's settlement/escrow pipeline confirms funds and shares have exchanged",
+        "determinability": "cannot_determine",
+        "reasons": "KEVO has no settlement/escrow pipeline yet (M26 not built)",
+        "source_milestone": "M26 (not yet built)"
+    })
+
+    steps.append({
+        "step_type": "CASH_RELEASE",
+        "sequence_position": 9,
+        "required": True,
+        "complete": False,
+        "evidence_reference_type": None,
+        "evidence_reference_id": None,
+        "responsible_party": "third_party",
+        "completion_trigger": "M26's settlement/escrow pipeline releases cash to the holder",
+        "determinability": "cannot_determine",
+        "reasons": "KEVO has no settlement/escrow pipeline yet (M26 not built)",
+        "source_milestone": "M26 (not yet built)"
+    })
+
+    return {
+        "ownership_record_id": ownership_record.id if ownership_record else None,
+        "steps": steps
+    }
+
+
+@app.get("/liquidity-path/listing/{listing_id}")
+def get_liquidity_path(
+    listing_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    listing = db.query(ListingModel).filter(
+        ListingModel.id == listing_id
+    ).first()
+
+    if listing is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Listing not found"
+        )
+
+    result = build_liquidity_path(listing, db)
+    ownership_record_id = result["ownership_record_id"]
+    run_id = uuid.uuid4().hex
+    computed_at = date.today()
+
+    saved_steps = []
+    previous_step_id = None
+
+    for step in result["steps"]:
+        row = LiquidityPathStep(
+            listing_id=listing.id,
+            ownership_record_id=ownership_record_id,
+            transaction_id=None,
+            run_id=run_id,
+            computed_at=computed_at,
+            step_type=step["step_type"],
+            sequence_position=step["sequence_position"],
+            required=step["required"],
+            complete=step["complete"],
+            evidence_reference_type=step["evidence_reference_type"],
+            evidence_reference_id=step["evidence_reference_id"],
+            responsible_party=step["responsible_party"],
+            blocking_step_id=previous_step_id,
+            completion_trigger=step["completion_trigger"],
+            determinability=step["determinability"],
+            reasons=step["reasons"],
+            source_milestone=step["source_milestone"]
+        )
+        db.add(row)
+        db.flush()
+        previous_step_id = row.id
+        saved_steps.append(row)
+
+    db.commit()
+
+    complete_count = sum(1 for s in saved_steps if s.complete)
+    cannot_determine_count = sum(1 for s in saved_steps if s.determinability == "cannot_determine")
+
+    return {
+        "listing_id": listing.id,
+        "run_id": run_id,
+        "computed_at": computed_at,
+        "summary": str(complete_count) + " of " + str(len(saved_steps)) + " steps confirmed complete; " + str(cannot_determine_count) + " step(s) cannot currently be determined",
+        "steps": [
+            {
+                "id": s.id,
+                "step_type": s.step_type,
+                "sequence_position": s.sequence_position,
+                "required": s.required,
+                "complete": s.complete,
+                "evidence_reference_type": s.evidence_reference_type,
+                "evidence_reference_id": s.evidence_reference_id,
+                "responsible_party": s.responsible_party,
+                "blocking_step_id": s.blocking_step_id,
+                "completion_trigger": s.completion_trigger,
+                "determinability": s.determinability,
+                "reasons": s.reasons,
+                "source_milestone": s.source_milestone
+            }
+            for s in saved_steps
+        ]
+    }
+
+
+# ---------------------------------------------------------------------------
+# M17 (first slice) — Transaction-scoped Liquidity Roadmap
+# Reuses build_liquidity_path() exactly as M15 does, just scoped to one
+# specific transaction (a deal) instead of always using the listing's
+# latest transaction. No new step-evaluation logic - same engine, just a
+# different caller, per the original M15/M17 design note.
+# ---------------------------------------------------------------------------
+
+@app.get("/liquidity-path/transaction/{transaction_id}")
+def get_liquidity_path_for_transaction(
+    transaction_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    transaction = db.query(Transaction).filter(
+        Transaction.id == transaction_id
+    ).first()
+
+    if transaction is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Transaction not found"
+        )
+
+    listing = db.query(ListingModel).filter(
+        ListingModel.id == transaction.listing_id
+    ).first()
+
+    if listing is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Listing not found for this transaction"
+        )
+
+    result = build_liquidity_path(listing, db, transaction_id=transaction.id)
+    ownership_record_id = result["ownership_record_id"]
+    run_id = uuid.uuid4().hex
+    computed_at = date.today()
+
+    saved_steps = []
+    previous_step_id = None
+
+    for step in result["steps"]:
+        row = LiquidityPathStep(
+            listing_id=listing.id,
+            ownership_record_id=ownership_record_id,
+            transaction_id=transaction.id,
+            run_id=run_id,
+            computed_at=computed_at,
+            step_type=step["step_type"],
+            sequence_position=step["sequence_position"],
+            required=step["required"],
+            complete=step["complete"],
+            evidence_reference_type=step["evidence_reference_type"],
+            evidence_reference_id=step["evidence_reference_id"],
+            responsible_party=step["responsible_party"],
+            blocking_step_id=previous_step_id,
+            completion_trigger=step["completion_trigger"],
+            determinability=step["determinability"],
+            reasons=step["reasons"],
+            source_milestone=step["source_milestone"]
+        )
+        db.add(row)
+        db.flush()
+        previous_step_id = row.id
+        saved_steps.append(row)
+
+    db.commit()
+
+    complete_count = sum(1 for s in saved_steps if s.complete)
+    cannot_determine_count = sum(1 for s in saved_steps if s.determinability == "cannot_determine")
+
+    return {
+        "transaction_id": transaction.id,
+        "listing_id": listing.id,
+        "run_id": run_id,
+        "computed_at": computed_at,
+        "summary": str(complete_count) + " of " + str(len(saved_steps)) + " steps confirmed complete; " + str(cannot_determine_count) + " step(s) cannot currently be determined",
+        "steps": [
+            {
+                "id": s.id,
+                "step_type": s.step_type,
+                "sequence_position": s.sequence_position,
+                "required": s.required,
+                "complete": s.complete,
+                "evidence_reference_type": s.evidence_reference_type,
+                "evidence_reference_id": s.evidence_reference_id,
+                "responsible_party": s.responsible_party,
+                "blocking_step_id": s.blocking_step_id,
+                "completion_trigger": s.completion_trigger,
+                "determinability": s.determinability,
+                "reasons": s.reasons,
+                "source_milestone": s.source_milestone
+            }
+            for s in saved_steps
+        ]
+    }
+
+
+# ---------------------------------------------------------------------------
+# M15/M16 Part 4 audit (2026-09-12) - Portfolio Liquidity
+# Extends M15's build_liquidity_path() across a seller's entire portfolio of
+# listings - no new step-evaluation logic, same engine, just a different
+# caller (same "presenter, not reimplementation" pattern as M17's Liquidity
+# Roadmap above). Confirmed via real-database audit that this does NOT
+# depend on transaction/settlement history the way Discount-for-Speed and
+# the general price-range engine do (both remain deferred) - it only needs
+# a seller who holds more than one listing, which the real data already
+# has. Live-computed, nothing persisted, same posture as Deal Health Score
+# and Risk Radar below (a portfolio dashboard viewed repeatedly should not
+# multiply audit-trail rows the way the single-listing GET intentionally
+# does).
+# ---------------------------------------------------------------------------
+
+def build_portfolio_liquidity(seller_id, db):
+    listings = db.query(ListingModel).filter(
+        ListingModel.seller_id == seller_id
+    ).all()
+
+    listing_results = []
+    next_blocking_step_counts = {}
+    listings_fully_complete = 0
+
+    for listing in listings:
+        result = build_liquidity_path(listing, db)
+        steps = result["steps"]
+
+        complete_count = sum(1 for s in steps if s["complete"])
+        cannot_determine_count = sum(1 for s in steps if s["determinability"] == "cannot_determine")
+
+        next_blocker = None
+        for step in sorted(steps, key=lambda s: s["sequence_position"]):
+            if step["required"] and not step["complete"]:
+                next_blocker = step
+                break
+
+        if next_blocker is None:
+            listings_fully_complete += 1
+        else:
+            step_type = next_blocker["step_type"]
+            next_blocking_step_counts[step_type] = next_blocking_step_counts.get(step_type, 0) + 1
+
+        listing_results.append({
+            "listing_id": listing.id,
+            "company": listing.company,
+            "asset_type": listing.asset_type,
+            "summary": str(complete_count) + " of " + str(len(steps)) + " steps confirmed complete; " + str(cannot_determine_count) + " step(s) cannot currently be determined",
+            "complete_count": complete_count,
+            "total_steps": len(steps),
+            "cannot_determine_count": cannot_determine_count,
+            "steps": steps
+        })
+
+    return {
+        "seller_id": seller_id,
+        "listing_count": len(listings),
+        "listings_fully_complete": listings_fully_complete,
+        "next_blocking_step_counts": next_blocking_step_counts,
+        "listings": listing_results
+    }
+
+
+@app.get("/portfolio-liquidity/seller/{seller_id}")
+def get_portfolio_liquidity(
+    seller_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    seller = db.query(UserModel).filter(UserModel.id == seller_id).first()
+
+    if seller is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Seller not found"
+        )
+
+    return build_portfolio_liquidity(seller_id, db)
+
+
+# ---------------------------------------------------------------------------
+# M17 (second slice) — Deal Health Score
+# A breakdown-only readout across six real, already-built sources. No
+# invented weighting, no composite number - a dimension either has a real
+# status or is honestly marked "cannot_determine". Nothing is persisted;
+# recomputed live on every call, same pattern as assess_compliance() and
+# evaluate_transferability().
+# ---------------------------------------------------------------------------
+
+def build_deal_health(transaction, db):
+    dimensions = []
+
+    buyer = db.query(UserModel).filter(UserModel.id == transaction.buyer_id).first()
+    listing = db.query(ListingModel).filter(ListingModel.id == transaction.listing_id).first()
+
+    # 1. Compliance - real assess_compliance() verdict
+    compliance_result = assess_compliance(buyer, listing, db)
+    dimensions.append({
+        "dimension": "compliance",
+        "determinable": True,
+        "status": compliance_result["status"],
+        "reason": compliance_result["explanation"]
+    })
+
+    # 2. Buyer readiness - the buyer's real KYC status
+    dimensions.append({
+        "dimension": "buyer_readiness",
+        "determinable": True,
+        "status": buyer.kyc_status,
+        "reason": "Buyer's real KYC status on file is '" + str(buyer.kyc_status) + "'"
+    })
+
+    # 3. Ownership - real verification status of ownership record(s) for this listing
+    ownership_records = db.query(OwnershipRecord).filter(
+        OwnershipRecord.listing_id == listing.id
+    ).all()
+
+    if len(ownership_records) == 0:
+        dimensions.append({
+            "dimension": "ownership",
+            "determinable": False,
+            "status": "cannot_determine",
+            "reason": "No ownership record on file for this listing"
+        })
+    else:
+        unverified = [r for r in ownership_records if r.verification_status != "verified"]
+        if len(unverified) > 0:
+            dimensions.append({
+                "dimension": "ownership",
+                "determinable": True,
+                "status": "pending",
+                "reason": str(len(unverified)) + " of " + str(len(ownership_records)) + " ownership record(s) for this listing are not yet verified"
+            })
+        else:
+            dimensions.append({
+                "dimension": "ownership",
+                "determinable": True,
+                "status": "verified",
+                "reason": "All " + str(len(ownership_records)) + " ownership record(s) for this listing are verified"
+            })
+
+    # 4. Settlement readiness - the transaction's own real status
+    settlement_map = {
+        "completed": "ready",
+        "settlement_pending": "in_progress",
+        "accepted": "in_progress",
+        "interested": "not_yet_committed",
+        "rejected": "not_ready",
+        "cancelled": "not_ready"
+    }
+    settlement_status = settlement_map.get(transaction.status, "cannot_determine")
+    dimensions.append({
+        "dimension": "settlement_readiness",
+        "determinable": True,
+        "status": settlement_status,
+        "reason": "Transaction's real status is '" + str(transaction.status) + "'"
+    })
+
+    # 5. Regulatory uncertainty - live transferability evaluation for this listing
+    transferability_result = evaluate_transferability(listing, db)
+
+    if transferability_result["applicable_rule_count"] == 0:
+        dimensions.append({
+            "dimension": "regulatory_uncertainty",
+            "determinable": False,
+            "status": "cannot_determine",
+            "reason": "No transferability rules found for this listing's jurisdiction and asset type"
+        })
+    else:
+        dimensions.append({
+            "dimension": "regulatory_uncertainty",
+            "determinable": True,
+            "status": transferability_result["status"],
+            "reason": "; ".join(transferability_result["reasons"])
+        })
+
+    # 6. Documentation - real evidence rows tied to this transaction
+    evidence_rows = db.query(Evidence).filter(
+        Evidence.transaction_id == transaction.id
+    ).all()
+
+    if len(evidence_rows) == 0:
+        dimensions.append({
+            "dimension": "documentation",
+            "determinable": False,
+            "status": "cannot_determine",
+            "reason": "No evidence has been collected for this transaction (document management is not yet built)"
+        })
+    else:
+        unverified_evidence = [e for e in evidence_rows if e.verification_status != "verified"]
+        if len(unverified_evidence) > 0:
+            dimensions.append({
+                "dimension": "documentation",
+                "determinable": True,
+                "status": "pending",
+                "reason": str(len(unverified_evidence)) + " of " + str(len(evidence_rows)) + " evidence record(s) are not yet verified"
+            })
+        else:
+            dimensions.append({
+                "dimension": "documentation",
+                "determinable": True,
+                "status": "verified",
+                "reason": "All " + str(len(evidence_rows)) + " evidence record(s) are verified"
+            })
+
+    determinable_dimensions = [d for d in dimensions if d["determinable"]]
+    cannot_determine_dimensions = [d for d in dimensions if not d["determinable"]]
+
+    healthy_statuses = {"eligible_pending_review", "eligible", "verified", "ready", "in_progress"}
+    healthy_count = sum(1 for d in determinable_dimensions if d["status"] in healthy_statuses)
+
+    risk_priority = {
+        "blocked": 0,
+        "conflict": 0,
+        "not_ready": 1,
+        "needs_evidence": 2,
+        "pending": 2,
+        "not_started": 2,
+        "review": 3,
+        "not_yet_committed": 3,
+    }
+
+    unhealthy_determinable = [d for d in determinable_dimensions if d["status"] not in healthy_statuses]
+
+    if len(unhealthy_determinable) > 0:
+        main_risk_dim = min(unhealthy_determinable, key=lambda d: risk_priority.get(d["status"], 5))
+    else:
+        main_risk_dim = None
+
+    summary = str(healthy_count) + " of " + str(len(determinable_dimensions)) + " determinable dimension(s) look healthy"
+    if len(cannot_determine_dimensions) > 0:
+        summary += "; " + str(len(cannot_determine_dimensions)) + " dimension(s) cannot currently be determined"
+
+    return {
+        "dimensions": dimensions,
+        "summary": summary,
+        "main_risk": {
+            "dimension": main_risk_dim["dimension"],
+            "status": main_risk_dim["status"],
+            "reason": main_risk_dim["reason"]
+        } if main_risk_dim is not None else None
+    }
+
+
+@app.get("/deal-health/transaction/{transaction_id}")
+def get_deal_health(
+    transaction_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    transaction = db.query(Transaction).filter(
+        Transaction.id == transaction_id
+    ).first()
+
+    if transaction is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    buyer = db.query(UserModel).filter(UserModel.id == transaction.buyer_id).first()
+
+    if buyer is None:
+        raise HTTPException(status_code=404, detail="Buyer not found for this transaction")
+
+    listing = db.query(ListingModel).filter(
+        ListingModel.id == transaction.listing_id
+    ).first()
+
+    if listing is None:
+        raise HTTPException(status_code=404, detail="Listing not found for this transaction")
+
+    result = build_deal_health(transaction, db)
+
+    return {
+        "transaction_id": transaction.id,
+        "listing_id": listing.id,
+        "summary": result["summary"],
+        "main_risk": result["main_risk"],
+        "dimensions": result["dimensions"]
+    }
+
+
+# ---------------------------------------------------------------------------
+# M17 (third slice) — Transaction Risk Radar
+# Four real, binary risk flags - each either fires on a real condition in
+# the data or it doesn't. No invented severity weighting, no invented
+# percentage thresholds. Nothing is persisted; recomputed live on every
+# call, same pattern as build_deal_health() and assess_compliance().
+# ---------------------------------------------------------------------------
+
+def build_risk_radar(transaction, db):
+    flags = []
+
+    seller = db.query(UserModel).filter(UserModel.id == transaction.seller_id).first()
+    listing = db.query(ListingModel).filter(ListingModel.id == transaction.listing_id).first()
+
+    # 1. Seller affiliate status
+    affiliate_status = seller.seller_affiliate_status
+    if affiliate_status is None:
+        flags.append({
+            "flag_type": "seller_affiliate_status",
+            "status": "flagged",
+            "reason": "Seller's affiliate status has not been recorded - potential Rule 144 restriction exposure is unknown."
+        })
+    elif affiliate_status == "non_affiliate":
+        flags.append({
+            "flag_type": "seller_affiliate_status",
+            "status": "clear",
+            "reason": "Seller's affiliate status on file is 'non_affiliate' - no additional resale restriction exposure flagged."
+        })
+    else:
+        flags.append({
+            "flag_type": "seller_affiliate_status",
+            "status": "flagged",
+            "reason": "Seller's affiliate status on file is '" + str(affiliate_status) + "' - affiliate sellers may face additional resale volume/manner restrictions (Rule 144) that have not yet been evaluated."
+        })
+
+    # 2. Conflicting transferability facts (live evaluation)
+    transferability_result = evaluate_transferability(listing, db)
+
+    if transferability_result["status"] == "conflict":
+        flags.append({
+            "flag_type": "transferability_conflict",
+            "status": "flagged",
+            "reason": "; ".join(transferability_result["reasons"])
+        })
+    else:
+        flags.append({
+            "flag_type": "transferability_conflict",
+            "status": "clear",
+            "reason": "No conflicting transferability facts on file for this listing."
+        })
+
+    # 3. Competing active transactions on the same listing
+    competing_transactions = db.query(Transaction).filter(
+        Transaction.listing_id == listing.id,
+        Transaction.id != transaction.id,
+        Transaction.status.in_(["interested", "accepted", "settlement_pending"])
+    ).all()
+
+    if len(competing_transactions) > 0:
+        flags.append({
+            "flag_type": "competing_active_transactions",
+            "status": "flagged",
+            "reason": str(len(competing_transactions)) + " other active transaction(s) exist on this same listing and may compete for the same quantity."
+        })
+    else:
+        flags.append({
+            "flag_type": "competing_active_transactions",
+            "status": "clear",
+            "reason": "No other active transactions exist on this listing."
+        })
+
+    # 4. Forecasted-but-not-yet-eligible timing (live evaluation)
+    if transferability_result["forecast_date"] is not None:
+        flags.append({
+            "flag_type": "transferability_forecast_timing",
+            "status": "flagged",
+            "reason": "Not currently eligible; forecast eligibility date on file: " + str(transferability_result["forecast_date"])
+        })
+    else:
+        flags.append({
+            "flag_type": "transferability_forecast_timing",
+            "status": "clear",
+            "reason": "No forecasted eligibility timing on file for this listing."
+        })
+
+    flagged_count = sum(1 for f in flags if f["status"] == "flagged")
+    summary = str(flagged_count) + " of " + str(len(flags)) + " risk flag(s) triggered for this transaction"
+
+    return {
+        "flags": flags,
+        "summary": summary
+    }
+
+
+@app.get("/risk-radar/transaction/{transaction_id}")
+def get_risk_radar(
+    transaction_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    transaction = db.query(Transaction).filter(
+        Transaction.id == transaction_id
+    ).first()
+
+    if transaction is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    seller = db.query(UserModel).filter(UserModel.id == transaction.seller_id).first()
+
+    if seller is None:
+        raise HTTPException(status_code=404, detail="Seller not found for this transaction")
+
+    listing = db.query(ListingModel).filter(
+        ListingModel.id == transaction.listing_id
+    ).first()
+
+    if listing is None:
+        raise HTTPException(status_code=404, detail="Listing not found for this transaction")
+
+    result = build_risk_radar(transaction, db)
+
+    return {
+        "transaction_id": transaction.id,
+        "listing_id": listing.id,
+        "summary": result["summary"],
+        "flags": result["flags"]
+    }
+
+
+# ---------------------------------------------------------------------------
+# M16 — Demand Heatmap / Blind Demand Curve
+# Pure, read-only aggregation over BuyerInterest data KEVO already has.
+# No price synthesis of any kind — every value returned is a count or a
+# quantity, never a computed price. Nothing is persisted; recomputed live
+# on every call.
+# ---------------------------------------------------------------------------
+
+MIN_DISTINCT_BUYERS = 5
+
+
+def _price_band_boundaries(prices, max_bands=10):
+    unique_sorted = sorted(set(prices))
+
+    if len(unique_sorted) <= 1:
+        return []
+
+    n = min(max_bands, len(unique_sorted))
+
+    if n < 2:
+        return []
+
+    cut_points = statistics.quantiles(unique_sorted, n=n, method="inclusive")
+
+    return sorted(set(round(c, 2) for c in cut_points))
+
+
+def _price_band_index(price, boundaries):
+    return bisect.bisect_right(boundaries, round(float(price), 2))
+
+
+def _price_band_range(band_index, boundaries, min_price, max_price):
+    low = float(min_price) if band_index == 0 else boundaries[band_index - 1]
+    high = float(max_price) if band_index == len(boundaries) else boundaries[band_index]
+    return low, high
+
+
+def build_demand_heatmap(company, asset_type, db):
+    interests = db.query(BuyerInterest).filter(
+        BuyerInterest.company == company,
+        BuyerInterest.asset_type == asset_type,
+        BuyerInterest.status == "active"
+    ).all()
+
+    distinct_buyers_total = {interest.buyer_id for interest in interests}
+
+    if len(distinct_buyers_total) < MIN_DISTINCT_BUYERS:
+        return {
+            "status": "insufficient_data",
+            "company": company,
+            "asset_type": asset_type,
+            "message": (
+                f"Fewer than {MIN_DISTINCT_BUYERS} distinct buyers have "
+                "stated active interest in this company/asset type — "
+                "insufficient data to display without risking "
+                "re-identification."
+            )
+        }
+
+    buyer_jurisdictions = {
+        user.id: (user.jurisdiction or "unknown")
+        for user in db.query(UserModel).filter(
+            UserModel.id.in_(distinct_buyers_total)
+        ).all()
+    }
+
+    prices = [float(interest.maximum_price) for interest in interests]
+    boundaries = _price_band_boundaries(prices)
+    min_price, max_price = min(prices), max(prices)
+    num_bands = len(boundaries) + 1
+
+    raw = defaultdict(lambda: defaultdict(lambda: {"buyers": set(), "quantity": 0}))
+
+    for interest in interests:
+        band = _price_band_index(interest.maximum_price, boundaries)
+        jurisdiction = buyer_jurisdictions.get(interest.buyer_id, "unknown")
+        cell = raw[band][jurisdiction]
+        cell["buyers"].add(interest.buyer_id)
+        cell["quantity"] += interest.desired_quantity
+
+    cells = []
+    pending_buyers = set()
+    pending_quantity = 0
+    pending_start_band = None
+
+    for band in range(num_bands):
+        jurisdiction_cells = raw.get(band, {})
+
+        thin_buyers = set()
+        thin_quantity = 0
+
+        for jurisdiction, cell in jurisdiction_cells.items():
+            if len(cell["buyers"]) >= MIN_DISTINCT_BUYERS:
+                low, high = _price_band_range(band, boundaries, min_price, max_price)
+                cells.append({
+                    "price_band_low": low,
+                    "price_band_high": high,
+                    "jurisdiction": jurisdiction,
+                    "buyer_count": len(cell["buyers"]),
+                    "total_desired_quantity": cell["quantity"]
+                })
+            else:
+                thin_buyers |= cell["buyers"]
+                thin_quantity += cell["quantity"]
+
+        if thin_buyers:
+            if pending_start_band is None:
+                pending_start_band = band
+            pending_buyers |= thin_buyers
+            pending_quantity += thin_quantity
+
+        if len(pending_buyers) >= MIN_DISTINCT_BUYERS:
+            low, _ = _price_band_range(pending_start_band, boundaries, min_price, max_price)
+            _, high = _price_band_range(band, boundaries, min_price, max_price)
+            cells.append({
+                "price_band_low": low,
+                "price_band_high": high,
+                "jurisdiction": None,
+                "buyer_count": len(pending_buyers),
+                "total_desired_quantity": pending_quantity
+            })
+            pending_buyers = set()
+            pending_quantity = 0
+            pending_start_band = None
+
+    cells.sort(key=lambda c: (c["price_band_low"], c["jurisdiction"] or ""))
+
+    return {
+        "status": "ok",
+        "company": company,
+        "asset_type": asset_type,
+        "cells": cells
+    }
+
+
+def build_demand_curve(company, asset_type, db):
+    interests = db.query(BuyerInterest).filter(
+        BuyerInterest.company == company,
+        BuyerInterest.asset_type == asset_type,
+        BuyerInterest.status == "active"
+    ).all()
+
+    distinct_buyers_total = {interest.buyer_id for interest in interests}
+
+    if len(distinct_buyers_total) < MIN_DISTINCT_BUYERS:
+        return {
+            "status": "insufficient_data",
+            "company": company,
+            "asset_type": asset_type,
+            "message": (
+                f"Fewer than {MIN_DISTINCT_BUYERS} distinct buyers have "
+                "stated active interest in this company/asset type — "
+                "insufficient data to display without risking "
+                "re-identification."
+            )
+        }
+
+    by_price = defaultdict(list)
+
+    for interest in interests:
+        by_price[round(float(interest.maximum_price), 2)].append(interest)
+
+    prices_desc = sorted(by_price.keys(), reverse=True)
+
+    points = []
+    cumulative_quantity = 0
+    pending_buyers = set()
+    pending_quantity = 0
+    price = None
+
+    for price in prices_desc:
+        group = by_price[price]
+        group_buyers = {i.buyer_id for i in group}
+        group_quantity = sum(i.desired_quantity for i in group)
+
+        cumulative_quantity += group_quantity
+        pending_buyers |= group_buyers
+        pending_quantity += group_quantity
+
+        if len(pending_buyers) >= MIN_DISTINCT_BUYERS:
+            points.append({
+                "price_at_or_above": price,
+                "cumulative_quantity": cumulative_quantity,
+                "distinct_buyers_in_step": len(pending_buyers)
+            })
+            pending_buyers = set()
+            pending_quantity = 0
+
+    if pending_buyers:
+        points[-1]["price_at_or_above"] = price
+        points[-1]["distinct_buyers_in_step"] += len(pending_buyers)
+        points[-1]["cumulative_quantity"] = cumulative_quantity
+
+    return {
+        "status": "ok",
+        "company": company,
+        "asset_type": asset_type,
+        "points": points
+    }
+
+
+@app.get("/demand-heatmap")
+def get_demand_heatmap(
+    company: str,
+    asset_type: str,
+    db: Session = Depends(get_db)
+):
+    return build_demand_heatmap(company, asset_type, db)
+
+
+@app.get("/demand-curve")
+def get_demand_curve(
+    company: str,
+    asset_type: str,
+    db: Session = Depends(get_db)
+):
+    return build_demand_curve(company, asset_type, db)
+
+
+# ---------------------------------------------------------------------------
+# M16B (narrowed, 2026-09-11/12) - Aggregate Demand/Supply Indicator
+# Full multi-party transaction coordination (KEVO's own logic deciding which
+# buyers combine with which sellers) was NOT built - see
+# claude/kevo-m16b-liquidity-aggregation-critical-assessment.md. Every real
+# comparable platform's multi-party matching function sits inside a
+# registered broker-dealer/ATS; this stays on the same safe, aggregate-only
+# footing already used by the Demand Heatmap above instead. Pure quantity
+# arithmetic on live data - no specific buyer or seller is ever named to the
+# other side, no allocation is ever decided, nothing is persisted.
+# ---------------------------------------------------------------------------
+
+def build_liquidity_aggregation(company, asset_type, db):
+    interests = db.query(BuyerInterest).filter(
+        BuyerInterest.company == company,
+        BuyerInterest.asset_type == asset_type,
+        BuyerInterest.status == "active"
+    ).all()
+
+    listings = db.query(ListingModel).filter(
+        ListingModel.company == company,
+        ListingModel.asset_type == asset_type,
+        ListingModel.is_transferable == True,
+        ListingModel.seller_id.isnot(None)
+    ).all()
+
+    distinct_buyers = {interest.buyer_id for interest in interests}
+    distinct_sellers = {listing.seller_id for listing in listings}
+
+    if len(distinct_buyers) < MIN_DISTINCT_BUYERS or len(distinct_sellers) < MIN_DISTINCT_BUYERS:
+        return {
+            "status": "insufficient_data",
+            "company": company,
+            "asset_type": asset_type,
+            "message": (
+                f"Fewer than {MIN_DISTINCT_BUYERS} distinct buyers and/or "
+                f"fewer than {MIN_DISTINCT_BUYERS} distinct sellers have "
+                "active interest/listings in this company/asset type - "
+                "insufficient data to display without risking "
+                "re-identification."
+            )
+        }
+
+    total_desired_quantity = sum(interest.desired_quantity for interest in interests)
+    total_available_quantity = sum(listing.quantity for listing in listings)
+
+    if total_available_quantity >= total_desired_quantity:
+        aggregate_status = "supply_may_cover_demand"
+        reason = (
+            "Aggregate active listed supply (" + str(total_available_quantity) +
+            ") meets or exceeds aggregate active buyer demand (" +
+            str(total_desired_quantity) + ") for this company and asset type. "
+            "This is a quantity comparison only - it does not check price "
+            "compatibility, ownership verification, transferability, or "
+            "compliance for any specific pairing, and it does not identify "
+            "or connect any specific buyer to any specific seller."
+        )
+    else:
+        aggregate_status = "insufficient_supply"
+        reason = (
+            "Aggregate active listed supply (" + str(total_available_quantity) +
+            ") is less than aggregate active buyer demand (" +
+            str(total_desired_quantity) + ") for this company and asset type."
+        )
+
+    return {
+        "status": "ok",
+        "company": company,
+        "asset_type": asset_type,
+        "active_buyer_count": len(distinct_buyers),
+        "total_desired_quantity": total_desired_quantity,
+        "active_seller_count": len(distinct_sellers),
+        "total_available_quantity": total_available_quantity,
+        "aggregate_status": aggregate_status,
+        "reason": reason
+    }
+
+
+@app.get("/liquidity-aggregation")
+def get_liquidity_aggregation(
+    company: str,
+    asset_type: str,
+    db: Session = Depends(get_db)
+):
+    return build_liquidity_aggregation(company, asset_type, db)
