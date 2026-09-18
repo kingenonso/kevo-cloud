@@ -2,8 +2,12 @@ import bisect
 import os
 import statistics
 from collections import defaultdict
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordBearer
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from pydantic import BaseModel
 from datetime import date, timedelta, datetime
 from sqlalchemy.orm import Session
@@ -17,6 +21,21 @@ from models import User as UserModel
 from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact
 from models import Transaction
 app = FastAPI(title="KEVO API")
+
+limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
 
 
 class UserCreate(BaseModel):
@@ -656,6 +675,8 @@ def get_db():
 SECRET_KEY = os.getenv("SECRET_KEY")
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
+MAX_FAILED_LOGIN_ATTEMPTS = 5
+LOCKOUT_DURATION_MINUTES = 15
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 
@@ -697,7 +718,8 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
 
 @app.post("/login")
-def login(credentials: LoginRequest, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def login(request: Request, credentials: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(UserModel).filter(
         UserModel.email == credentials.email
     ).first()
@@ -708,11 +730,26 @@ def login(credentials: LoginRequest, db: Session = Depends(get_db)):
             detail="Incorrect email or password"
         )
 
+    if user.locked_until is not None and user.locked_until > datetime.utcnow():
+        raise HTTPException(
+            status_code=423,
+            detail="Account temporarily locked due to repeated failed login attempts. Try again later."
+        )
+
     if not verify_password(credentials.password, user.hashed_password):
+        user.failed_login_attempts += 1
+        if user.failed_login_attempts >= MAX_FAILED_LOGIN_ATTEMPTS:
+            user.locked_until = datetime.utcnow() + timedelta(minutes=LOCKOUT_DURATION_MINUTES)
+            user.failed_login_attempts = 0
+        db.commit()
         raise HTTPException(
             status_code=401,
             detail="Incorrect email or password"
         )
+
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    db.commit()
 
     access_token = create_access_token(user.id)
 
