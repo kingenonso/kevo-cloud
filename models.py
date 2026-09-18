@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, Boolean, Date
+from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, Boolean, Date, DateTime
 from sqlalchemy.orm import declarative_base, relationship
 
 
@@ -17,6 +17,8 @@ class User(Base):
     seller_affiliate_status = Column(String(50), nullable=True)
     hashed_password = Column(String(255), nullable=True)
     account_type = Column(String(50), nullable=False, default="participant")
+    failed_login_attempts = Column(Integer, nullable=False, default=0)
+    locked_until = Column(DateTime, nullable=True)
 
     listings = relationship("Listing", back_populates="seller")
 
