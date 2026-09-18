@@ -2948,10 +2948,10 @@ def build_liquidity_path(listing, db, transaction_id=None):
         "evidence_reference_type": "Evidence",
         "evidence_reference_id": None,
         "responsible_party": "holder",
-        "completion_trigger": "KEVO builds a per-jurisdiction required-document registry (M23) and every required document is verified",
+        "completion_trigger": "KEVO builds a per-jurisdiction required-document registry (not yet built) and every required document is verified",
         "determinability": "required_but_unverified",
-        "reasons": str(evidence_verified_count) + " verified and " + str(evidence_pending_count) + " pending evidence record(s) on file — KEVO cannot yet confirm this is the complete required set, no document registry exists yet (M23)",
-        "source_milestone": "M23 (not yet built)"
+        "reasons": str(evidence_verified_count) + " verified and " + str(evidence_pending_count) + " pending evidence record(s) on file — KEVO cannot yet confirm this is the complete required set, no per-jurisdiction required-document registry exists yet",
+        "source_milestone": "M23 first slice built (Evidence CRUD); per-jurisdiction required-document registry not yet built"
     })
 
     applicable_rules = find_applicable_transferability_rules(listing, db)
@@ -3271,6 +3271,12 @@ def get_liquidity_path_for_transaction(
             detail="Transaction not found"
         )
 
+    if current_user.account_type != "admin" and current_user.id not in (transaction.buyer_id, transaction.seller_id):
+        raise HTTPException(
+            status_code=403,
+            detail="You are not a party to this transaction"
+        )
+
     listing = db.query(ListingModel).filter(
         ListingModel.id == transaction.listing_id
     ).first()
@@ -3532,7 +3538,7 @@ def build_deal_health(transaction, db):
             "dimension": "documentation",
             "determinable": False,
             "status": "cannot_determine",
-            "reason": "No evidence has been collected for this transaction (document management is not yet built)"
+            "reason": "No evidence has been collected for this transaction yet"
         })
     else:
         unverified_evidence = [e for e in evidence_rows if e.verification_status != "verified"]
@@ -3602,6 +3608,12 @@ def get_deal_health(
 
     if transaction is None:
         raise HTTPException(status_code=404, detail="Transaction not found")
+
+    if current_user.account_type != "admin" and current_user.id not in (transaction.buyer_id, transaction.seller_id):
+        raise HTTPException(
+            status_code=403,
+            detail="You are not a party to this transaction"
+        )
 
     buyer = db.query(UserModel).filter(UserModel.id == transaction.buyer_id).first()
 
@@ -3733,6 +3745,12 @@ def get_risk_radar(
     if transaction is None:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
+    if current_user.account_type != "admin" and current_user.id not in (transaction.buyer_id, transaction.seller_id):
+        raise HTTPException(
+            status_code=403,
+            detail="You are not a party to this transaction"
+        )
+
     seller = db.query(UserModel).filter(UserModel.id == transaction.seller_id).first()
 
     if seller is None:
@@ -3752,6 +3770,118 @@ def get_risk_radar(
         "listing_id": listing.id,
         "summary": result["summary"],
         "flags": result["flags"]
+    }
+
+
+# ---------------------------------------------------------------------------
+# M24 (first slice) — KEVO Deal Room
+# A read-only aggregator over data that already exists elsewhere in the
+# API - participants, the live compliance verdict, ownership status,
+# evidence documents linked to this specific transaction (M23), and the
+# M17 trio (Deal Health Score, Risk Radar, Liquidity Roadmap) - presented
+# as one authorized view instead of five separate calls. No new tables,
+# nothing persisted here (the roadmap piece calls build_liquidity_path()
+# directly rather than the archiving /liquidity-path/transaction/{id}
+# endpoint, so this call has no side effects, same as deal-health and
+# risk-radar). Messages, negotiation, ROFR workflow, approvals,
+# settlement, and audit trail are explicitly out of scope for this slice
+# - each is its own future milestone (M25/M26/M27) with no real
+# implementation yet to aggregate.
+# ---------------------------------------------------------------------------
+
+@app.get("/deal-room/transaction/{transaction_id}")
+def get_deal_room(
+    transaction_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    transaction = db.query(Transaction).filter(
+        Transaction.id == transaction_id
+    ).first()
+
+    if transaction is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    if current_user.account_type != "admin" and current_user.id not in (transaction.buyer_id, transaction.seller_id):
+        raise HTTPException(
+            status_code=403,
+            detail="You are not a party to this transaction"
+        )
+
+    buyer = db.query(UserModel).filter(UserModel.id == transaction.buyer_id).first()
+    seller = db.query(UserModel).filter(UserModel.id == transaction.seller_id).first()
+
+    if buyer is None or seller is None:
+        raise HTTPException(status_code=404, detail="Buyer or seller not found for this transaction")
+
+    listing = db.query(ListingModel).filter(
+        ListingModel.id == transaction.listing_id
+    ).first()
+
+    if listing is None:
+        raise HTTPException(status_code=404, detail="Listing not found for this transaction")
+
+    compliance_result = assess_compliance(buyer, listing, db)
+
+    ownership_records = db.query(OwnershipRecord).filter(
+        OwnershipRecord.listing_id == listing.id
+    ).all()
+    ownership_summary = {
+        "records_on_file": len(ownership_records),
+        "all_verified": len(ownership_records) > 0 and all(
+            r.verification_status == "verified" for r in ownership_records
+        )
+    }
+
+    evidence_rows = db.query(Evidence).filter(
+        Evidence.transaction_id == transaction.id
+    ).all()
+    documents = [
+        {
+            "id": e.id,
+            "evidence_type": e.evidence_type,
+            "description": e.description,
+            "verification_status": e.verification_status,
+            "file_reference": e.file_reference,
+            "file_hash": e.file_hash
+        }
+        for e in evidence_rows
+    ]
+
+    deal_health = build_deal_health(transaction, db)
+    risk_radar = build_risk_radar(transaction, db)
+    liquidity_path = build_liquidity_path(listing, db, transaction_id=transaction.id)
+
+    return {
+        "transaction": {
+            "id": transaction.id,
+            "listing_id": transaction.listing_id,
+            "quantity": transaction.quantity,
+            "agreed_price": transaction.agreed_price,
+            "status": transaction.status
+        },
+        "participants": {
+            "buyer": {"id": buyer.id, "role": buyer.role},
+            "seller": {"id": seller.id, "role": seller.role}
+        },
+        "compliance": {
+            "status": compliance_result["status"],
+            "explanation": compliance_result["explanation"]
+        },
+        "ownership": ownership_summary,
+        "documents": documents,
+        "deal_health": {
+            "summary": deal_health["summary"],
+            "main_risk": deal_health["main_risk"],
+            "dimensions": deal_health["dimensions"]
+        },
+        "risk_radar": {
+            "summary": risk_radar["summary"],
+            "flags": risk_radar["flags"]
+        },
+        "liquidity_roadmap": {
+            "steps": liquidity_path["steps"]
+        }
     }
 
 
