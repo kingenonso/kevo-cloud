@@ -263,6 +263,7 @@ class Evidence(Base):
     evidence_type = Column(String(100), nullable=False)
     description = Column(String(500), nullable=False)
     file_reference = Column(String(500), nullable=True)
+    file_hash = Column(String(64), nullable=True)
     verification_status = Column(String(50), nullable=False, default="pending")
     source_reference = Column(String(500), nullable=True)
 
