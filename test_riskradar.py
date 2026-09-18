@@ -61,6 +61,7 @@ def client(db_session):
         name="Auth Test User",
         email="__test_auth_user__@kevo.local",
         role="buyer",
+        account_type="admin",
         hashed_password=hash_password("testpass123"),
     )
     db_session.add(auth_user)
