@@ -1722,6 +1722,218 @@ def get_investor_eligibility_record(
     }
 
 
+class EvidenceCreate(BaseModel):
+    user_id: int
+    listing_id: int | None = None
+    transaction_id: int | None = None
+    ownership_record_id: int | None = None
+    evidence_type: str
+    description: str
+    file_reference: str | None = None
+    file_hash: str | None = None
+    source_reference: str | None = None
+
+
+@app.post("/evidence")
+def create_evidence(
+    evidence: EvidenceCreate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    user = db.query(UserModel).filter(
+        UserModel.id == evidence.user_id
+    ).first()
+
+    if user is None:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found"
+        )
+
+    is_admin = current_user.account_type == "admin"
+
+    if not is_admin and current_user.id != evidence.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only submit evidence for yourself"
+        )
+
+    if evidence.file_reference and not evidence.file_hash:
+        raise HTTPException(
+            status_code=400,
+            detail="file_hash is required when file_reference is provided"
+        )
+
+    if evidence.listing_id is not None:
+        listing = db.query(ListingModel).filter(ListingModel.id == evidence.listing_id).first()
+        if listing is None:
+            raise HTTPException(status_code=404, detail="Listing not found")
+
+    if evidence.transaction_id is not None:
+        transaction = db.query(Transaction).filter(Transaction.id == evidence.transaction_id).first()
+        if transaction is None:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+
+    if evidence.ownership_record_id is not None:
+        ownership_record = db.query(OwnershipRecord).filter(OwnershipRecord.id == evidence.ownership_record_id).first()
+        if ownership_record is None:
+            raise HTTPException(status_code=404, detail="Ownership record not found")
+
+    new_evidence = Evidence(
+        user_id=evidence.user_id,
+        listing_id=evidence.listing_id,
+        transaction_id=evidence.transaction_id,
+        ownership_record_id=evidence.ownership_record_id,
+        evidence_type=evidence.evidence_type,
+        description=evidence.description,
+        file_reference=evidence.file_reference,
+        file_hash=evidence.file_hash,
+        source_reference=evidence.source_reference
+    )
+
+    db.add(new_evidence)
+    db.commit()
+    db.refresh(new_evidence)
+
+    return {
+        "message": "Evidence created",
+        "evidence": {
+            "id": new_evidence.id,
+            "user_id": new_evidence.user_id,
+            "listing_id": new_evidence.listing_id,
+            "transaction_id": new_evidence.transaction_id,
+            "ownership_record_id": new_evidence.ownership_record_id,
+            "evidence_type": new_evidence.evidence_type,
+            "description": new_evidence.description,
+            "file_reference": new_evidence.file_reference,
+            "file_hash": new_evidence.file_hash,
+            "verification_status": new_evidence.verification_status,
+            "source_reference": new_evidence.source_reference
+        }
+    }
+
+
+@app.put("/evidence/{evidence_id}/verify")
+def verify_evidence(
+    evidence_id: int,
+    status: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only an admin can verify evidence"
+        )
+
+    evidence = db.query(Evidence).filter(
+        Evidence.id == evidence_id
+    ).first()
+
+    if evidence is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Evidence not found"
+        )
+
+    if status not in ["verified", "rejected"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Status must be verified or rejected"
+        )
+
+    evidence.verification_status = status
+
+    db.commit()
+    db.refresh(evidence)
+
+    return {
+        "message": "Evidence verification updated",
+        "evidence": {
+            "id": evidence.id,
+            "user_id": evidence.user_id,
+            "listing_id": evidence.listing_id,
+            "transaction_id": evidence.transaction_id,
+            "ownership_record_id": evidence.ownership_record_id,
+            "evidence_type": evidence.evidence_type,
+            "description": evidence.description,
+            "file_reference": evidence.file_reference,
+            "file_hash": evidence.file_hash,
+            "verification_status": evidence.verification_status,
+            "source_reference": evidence.source_reference
+        }
+    }
+
+
+@app.get("/evidence")
+def get_evidence_records(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type == "admin":
+        records = db.query(Evidence).all()
+    else:
+        records = db.query(Evidence).filter(
+            Evidence.user_id == current_user.id
+        ).all()
+
+    return [
+        {
+            "id": r.id,
+            "user_id": r.user_id,
+            "listing_id": r.listing_id,
+            "transaction_id": r.transaction_id,
+            "ownership_record_id": r.ownership_record_id,
+            "evidence_type": r.evidence_type,
+            "description": r.description,
+            "file_reference": r.file_reference,
+            "file_hash": r.file_hash,
+            "verification_status": r.verification_status,
+            "source_reference": r.source_reference
+        }
+        for r in records
+    ]
+
+
+@app.get("/evidence/{evidence_id}")
+def get_evidence_record(
+    evidence_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    record = db.query(Evidence).filter(
+        Evidence.id == evidence_id
+    ).first()
+
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Evidence not found"
+        )
+
+    if current_user.account_type != "admin" and current_user.id != record.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only view your own evidence"
+        )
+
+    return {
+        "evidence": {
+            "id": record.id,
+            "user_id": record.user_id,
+            "listing_id": record.listing_id,
+            "transaction_id": record.transaction_id,
+            "ownership_record_id": record.ownership_record_id,
+            "evidence_type": record.evidence_type,
+            "description": record.description,
+            "file_reference": record.file_reference,
+            "file_hash": record.file_hash,
+            "verification_status": record.verification_status,
+            "source_reference": record.source_reference
+        }
+    }
+
+
 @app.post("/kyc-facts")
 def create_kyc_fact(
     fact: KYCFactCreate,
