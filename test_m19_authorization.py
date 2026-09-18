@@ -705,3 +705,110 @@ def test_create_compliance_rule_participant_403(client, db_session):
 def test_create_compliance_rule_unauthenticated_401(client, db_session):
     resp = client.post("/compliance-rules", json=compliance_rule_payload())
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Same-day follow-up, found while starting M24's audit: deal-health,
+# risk-radar, and liquidity-path/transaction were all built under M17
+# (2026-09-11) - before M19 existed - and never made it onto M19's original
+# checklist of endpoints to gate. All three required login but never
+# checked that the caller was actually a party to the transaction (or
+# admin). Fixed with the exact same owner-or-admin check already proven
+# out on get_transaction. These tests prove the fix on all three.
+# ---------------------------------------------------------------------------
+
+def test_get_deal_health_party_succeeds(client, db_session):
+    seller = make_user(db_session, "1")
+    buyer = make_user(db_session, "2")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer)
+
+    resp = client.get(f"/deal-health/transaction/{txn.id}", headers=auth_headers(buyer))
+    assert resp.status_code == 200
+
+
+def test_get_deal_health_non_party_403(client, db_session):
+    seller = make_user(db_session, "1")
+    buyer = make_user(db_session, "2")
+    stranger = make_user(db_session, "3")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer)
+
+    resp = client.get(f"/deal-health/transaction/{txn.id}", headers=auth_headers(stranger))
+    assert resp.status_code == 403
+
+
+def test_get_deal_health_admin_succeeds(client, db_session):
+    seller = make_user(db_session, "1")
+    buyer = make_user(db_session, "2")
+    admin = make_user(db_session, "3", account_type="admin")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer)
+
+    resp = client.get(f"/deal-health/transaction/{txn.id}", headers=auth_headers(admin))
+    assert resp.status_code == 200
+
+
+def test_get_risk_radar_party_succeeds(client, db_session):
+    seller = make_user(db_session, "1")
+    buyer = make_user(db_session, "2")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer)
+
+    resp = client.get(f"/risk-radar/transaction/{txn.id}", headers=auth_headers(seller))
+    assert resp.status_code == 200
+
+
+def test_get_risk_radar_non_party_403(client, db_session):
+    seller = make_user(db_session, "1")
+    buyer = make_user(db_session, "2")
+    stranger = make_user(db_session, "3")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer)
+
+    resp = client.get(f"/risk-radar/transaction/{txn.id}", headers=auth_headers(stranger))
+    assert resp.status_code == 403
+
+
+def test_get_risk_radar_admin_succeeds(client, db_session):
+    seller = make_user(db_session, "1")
+    buyer = make_user(db_session, "2")
+    admin = make_user(db_session, "3", account_type="admin")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer)
+
+    resp = client.get(f"/risk-radar/transaction/{txn.id}", headers=auth_headers(admin))
+    assert resp.status_code == 200
+
+
+def test_get_liquidity_path_transaction_party_succeeds(client, db_session):
+    seller = make_user(db_session, "1")
+    buyer = make_user(db_session, "2")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer)
+
+    resp = client.get(f"/liquidity-path/transaction/{txn.id}", headers=auth_headers(buyer))
+    assert resp.status_code == 200
+
+
+def test_get_liquidity_path_transaction_non_party_403(client, db_session):
+    seller = make_user(db_session, "1")
+    buyer = make_user(db_session, "2")
+    stranger = make_user(db_session, "3")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer)
+
+    resp = client.get(f"/liquidity-path/transaction/{txn.id}", headers=auth_headers(stranger))
+    assert resp.status_code == 403
+
+
+def test_get_liquidity_path_transaction_admin_succeeds(client, db_session):
+    seller = make_user(db_session, "1")
+    buyer = make_user(db_session, "2")
+    admin = make_user(db_session, "3", account_type="admin")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer)
+
+    resp = client.get(f"/liquidity-path/transaction/{txn.id}", headers=auth_headers(admin))
+    assert resp.status_code == 200
+
