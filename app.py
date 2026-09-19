@@ -18,7 +18,7 @@ import jwt
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest
 from models import Transaction
 app = FastAPI(title="KEVO API")
 
@@ -4185,6 +4185,155 @@ def get_settlement_record(
     if current_user.account_type != "admin" and current_user.id not in (transaction.buyer_id, transaction.seller_id):
         raise HTTPException(status_code=403, detail="You are not a party to this transaction")
     return settlement_record
+
+
+# ---------------------------------------------------------------------------
+# M26B — Share-Backed Lending Marketplace (first slice: broker/matcher only)
+# KEVO never originates a loan, never funds one, and never takes or holds
+# collateral. It tracks a holder's request to borrow against verified shares
+# through to a real, licensed external lender. Matching and closing are
+# admin-recorded, mirroring M26's settlement-tracking pattern.
+# ---------------------------------------------------------------------------
+
+@app.post("/loan-requests")
+def create_loan_request(
+    ownership_record_id: int,
+    requested_amount: float,
+    notes: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    ownership_record = db.query(OwnershipRecord).filter(OwnershipRecord.id == ownership_record_id).first()
+    if ownership_record is None:
+        raise HTTPException(status_code=404, detail="Ownership record not found")
+    if ownership_record.seller_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only request a loan against your own ownership record")
+    if ownership_record.verification_status != "verified":
+        raise HTTPException(status_code=400, detail="Ownership record must be verified before it can back a loan request")
+    if requested_amount <= 0:
+        raise HTTPException(status_code=400, detail="Requested amount must be greater than zero")
+    loan_request = LoanRequest(
+        holder_id=current_user.id,
+        ownership_record_id=ownership_record_id,
+        requested_amount=requested_amount,
+        status="requested",
+        notes=notes
+    )
+    db.add(loan_request)
+    db.commit()
+    db.refresh(loan_request)
+    return loan_request
+
+
+@app.put("/loan-requests/{loan_request_id}/withdraw")
+def withdraw_loan_request(
+    loan_request_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    loan_request = db.query(LoanRequest).filter(LoanRequest.id == loan_request_id).first()
+    if loan_request is None:
+        raise HTTPException(status_code=404, detail="Loan request not found")
+    if loan_request.holder_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only withdraw your own loan request")
+    if loan_request.status != "requested":
+        raise HTTPException(status_code=400, detail="Only a loan request still in 'requested' status can be withdrawn")
+    loan_request.status = "withdrawn"
+    db.commit()
+    db.refresh(loan_request)
+    return loan_request
+
+
+@app.put("/loan-requests/{loan_request_id}/match")
+def match_loan_request(
+    loan_request_id: int,
+    external_lender_name: str,
+    external_lender_reference: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can record a match to a real external lender")
+    loan_request = db.query(LoanRequest).filter(LoanRequest.id == loan_request_id).first()
+    if loan_request is None:
+        raise HTTPException(status_code=404, detail="Loan request not found")
+    if loan_request.status != "requested":
+        raise HTTPException(status_code=400, detail="Only a loan request still in 'requested' status can be matched")
+    loan_request.external_lender_name = external_lender_name
+    loan_request.external_lender_reference = external_lender_reference
+    loan_request.matched_at = datetime.utcnow()
+    loan_request.status = "matched"
+    db.commit()
+    db.refresh(loan_request)
+    return loan_request
+
+
+@app.put("/loan-requests/{loan_request_id}/decline")
+def decline_loan_request(
+    loan_request_id: int,
+    notes: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can decline a loan request")
+    loan_request = db.query(LoanRequest).filter(LoanRequest.id == loan_request_id).first()
+    if loan_request is None:
+        raise HTTPException(status_code=404, detail="Loan request not found")
+    if loan_request.status != "requested":
+        raise HTTPException(status_code=400, detail="Only a loan request still in 'requested' status can be declined")
+    loan_request.status = "declined"
+    if notes is not None:
+        loan_request.notes = notes
+    db.commit()
+    db.refresh(loan_request)
+    return loan_request
+
+
+@app.put("/loan-requests/{loan_request_id}/close")
+def close_loan_request(
+    loan_request_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can close a loan request")
+    loan_request = db.query(LoanRequest).filter(LoanRequest.id == loan_request_id).first()
+    if loan_request is None:
+        raise HTTPException(status_code=404, detail="Loan request not found")
+    if loan_request.status != "matched":
+        raise HTTPException(status_code=400, detail="Only a matched loan request can be closed")
+    loan_request.status = "closed"
+    loan_request.closed_at = datetime.utcnow()
+    db.commit()
+    db.refresh(loan_request)
+    return loan_request
+
+
+@app.get("/loan-requests")
+def get_loan_requests(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type == "admin":
+        loan_requests = db.query(LoanRequest).all()
+    else:
+        loan_requests = db.query(LoanRequest).filter(LoanRequest.holder_id == current_user.id).all()
+    return loan_requests
+
+
+@app.get("/loan-requests/{loan_request_id}")
+def get_loan_request(
+    loan_request_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    loan_request = db.query(LoanRequest).filter(LoanRequest.id == loan_request_id).first()
+    if loan_request is None:
+        raise HTTPException(status_code=404, detail="Loan request not found")
+    if current_user.account_type != "admin" and loan_request.holder_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You do not have access to this loan request")
+    return loan_request
 
 
 # ---------------------------------------------------------------------------
