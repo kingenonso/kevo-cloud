@@ -536,3 +536,33 @@ class LoanRequest(Base):
     closed_at = Column(DateTime, nullable=True)
     notes = Column(String(1000), nullable=True)
 
+
+class OptionFundingReferral(Base):
+    """
+    M26D (first slice) - Option Exercise Funding, referral/tracking only.
+
+    Research found this milestone is NOT a lighter version of M26B's
+    share-backed lending: real option-exercise funders (EquityBee, Secfi,
+    ESO Fund) structure the product as a prepaid variable forward contract
+    - the same instrument class that got M25B parked over SEC
+    swap-reclassification risk - and comply with securities law by running
+    their investor side through their own registered broker-dealer
+    subsidiary, restricted to accredited investors. That is a heavier lift
+    than anything KEVO has built. So KEVO builds nothing of the financial
+    instrument itself here: this table only tracks that a holder asked for
+    a referral, and that KEVO's own team pointed them at a named, real,
+    already-licensed provider who handles the entire funding arrangement
+    independently. KEVO originates nothing, structures nothing, and holds
+    no interest in the outcome.
+    """
+    __tablename__ = "option_funding_referrals"
+
+    id = Column(Integer, primary_key=True)
+    holder_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    company = Column(String(255), nullable=False)
+    notes = Column(String(1000), nullable=True)
+    status = Column(String(50), nullable=False, default="requested")
+    referred_provider_name = Column(String(255), nullable=True)
+    referred_at = Column(DateTime, nullable=True)
+    closed_at = Column(DateTime, nullable=True)
+
