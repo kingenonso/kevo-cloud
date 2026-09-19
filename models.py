@@ -460,3 +460,36 @@ class RofrRequest(Base):
     response_notes = Column(String(1000), nullable=True)
     responded_at = Column(DateTime, nullable=True)
     source_reference = Column(String(500), nullable=True)
+class SettlementRecord(Base):
+    """
+    M26 (first slice) - Settlement status tracking, orchestration-only.
+
+    KEVO never holds client funds or acts as custodian - that would create
+    real money-transmitter and (per the California DFPI Escrow Law example
+    already researched) potentially state escrow-licensing exposure. This
+    table tracks the real-world confirmations a licensed escrow/bank
+    provider would report once KEVO integrates with one - it does not move
+    money itself. Every field is admin-recorded because, until a real
+    provider integration exists, these are facts only KEVO's own team can
+    attest to; a buyer or seller can never self-declare "funds received."
+
+    Release is deliberately sequential, not atomic: funds_released can only
+    be set once both funds_received and shares_confirmed_transferable are
+    true. True delivery-versus-payment (money and shares becoming
+    conditional on each other atomically) is M26E's scope, built on top of
+    this table, not this first slice's.
+    """
+    __tablename__ = "settlement_records"
+
+    id = Column(Integer, primary_key=True)
+    transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=False, unique=True)
+    status = Column(String(50), nullable=False, default="pending")
+    escrow_provider_reference = Column(String(500), nullable=True)
+    funds_received = Column(Boolean, nullable=False, default=False)
+    funds_received_at = Column(DateTime, nullable=True)
+    shares_confirmed_transferable = Column(Boolean, nullable=False, default=False)
+    shares_confirmed_transferable_at = Column(DateTime, nullable=True)
+    funds_released = Column(Boolean, nullable=False, default=False)
+    funds_released_at = Column(DateTime, nullable=True)
+    notes = Column(String(1000), nullable=True)
+

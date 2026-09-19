@@ -18,7 +18,7 @@ import jwt
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord
 from models import Transaction
 app = FastAPI(title="KEVO API")
 
@@ -3102,7 +3102,7 @@ def build_liquidity_path(listing, db, transaction_id=None):
             "completion_trigger": "Already resolved by an existing transaction record",
             "determinability": "known_complete",
             "reasons": "Transaction " + str(transaction.id) + " has status '" + transaction.status + "' with an agreed price of " + str(transaction.agreed_price),
-            "source_milestone": "Transaction table (built); full negotiation workflow is M25 (not yet built)"
+            "source_milestone": "Transaction table (built); M25 added ROFR consent only, negotiation workflow unbuilt"
         })
     elif transaction is not None:
         steps.append({
@@ -3116,7 +3116,7 @@ def build_liquidity_path(listing, db, transaction_id=None):
             "completion_trigger": "Holder and buyer agree a price, recorded as a Transaction",
             "determinability": "known_incomplete",
             "reasons": "Transaction " + str(transaction.id) + "'s current status is '" + transaction.status + "' — this does not represent an agreed price",
-            "source_milestone": "Transaction table (built); full negotiation workflow is M25 (not yet built)"
+            "source_milestone": "Transaction table (built); M25 added ROFR consent only, negotiation workflow unbuilt"
         })
     else:
         steps.append({
@@ -3130,35 +3130,75 @@ def build_liquidity_path(listing, db, transaction_id=None):
             "completion_trigger": "Holder and buyer agree a price, recorded as a Transaction",
             "determinability": "known_incomplete",
             "reasons": "No transaction record exists for this listing yet — no negotiation has taken place",
-            "source_milestone": "Transaction table (built); full negotiation workflow is M25 (not yet built)"
+            "source_milestone": "Transaction table (built); M25 added ROFR consent only, negotiation workflow unbuilt"
         })
+
+    settlement_record = None
+    if transaction is not None:
+        settlement_record = db.query(SettlementRecord).filter(
+            SettlementRecord.transaction_id == transaction.id
+        ).first()
+
+    if settlement_record is not None and settlement_record.funds_received and settlement_record.shares_confirmed_transferable:
+        settlement_complete = True
+        settlement_determinability = "known_complete"
+        settlement_reasons = "Settlement record " + str(settlement_record.id) + " confirms both funds received and shares confirmed transferable"
+    elif settlement_record is not None:
+        settlement_complete = False
+        settlement_determinability = "known_incomplete"
+        settlement_reasons = "Settlement record " + str(settlement_record.id) + " exists with status '" + settlement_record.status + "' but funds and/or shares confirmation is still incomplete"
+    elif transaction is not None:
+        settlement_complete = False
+        settlement_determinability = "known_incomplete"
+        settlement_reasons = "Transaction " + str(transaction.id) + " exists but settlement tracking has not begun yet (no SettlementRecord created)"
+    else:
+        settlement_complete = False
+        settlement_determinability = "cannot_determine"
+        settlement_reasons = "No transaction exists for this listing yet, so settlement cannot begin"
 
     steps.append({
         "step_type": "SETTLEMENT",
         "sequence_position": 8,
         "required": True,
-        "complete": False,
-        "evidence_reference_type": None,
-        "evidence_reference_id": None,
+        "complete": settlement_complete,
+        "evidence_reference_type": "SettlementRecord" if settlement_record is not None else None,
+        "evidence_reference_id": settlement_record.id if settlement_record is not None else None,
         "responsible_party": "third_party",
-        "completion_trigger": "M26's settlement/escrow pipeline confirms funds and shares have exchanged",
-        "determinability": "cannot_determine",
-        "reasons": "KEVO has no settlement/escrow pipeline yet (M26 not built)",
-        "source_milestone": "M26 (not yet built)"
+        "completion_trigger": "Admin confirms (on the licensed escrow provider's behalf) that funds have been received and shares are confirmed transferable",
+        "determinability": settlement_determinability,
+        "reasons": settlement_reasons,
+        "source_milestone": "M26 first slice (settlement status tracking, orchestration-only; KEVO never holds funds itself)"
     })
+
+    if settlement_record is not None and settlement_record.funds_released:
+        cash_release_complete = True
+        cash_release_determinability = "known_complete"
+        cash_release_reasons = "Settlement record " + str(settlement_record.id) + " confirms funds have been released"
+    elif settlement_record is not None:
+        cash_release_complete = False
+        cash_release_determinability = "known_incomplete"
+        cash_release_reasons = "Settlement record " + str(settlement_record.id) + " exists but funds have not been released yet"
+    elif transaction is not None:
+        cash_release_complete = False
+        cash_release_determinability = "known_incomplete"
+        cash_release_reasons = "Transaction " + str(transaction.id) + " exists but settlement tracking has not begun yet (no SettlementRecord created)"
+    else:
+        cash_release_complete = False
+        cash_release_determinability = "cannot_determine"
+        cash_release_reasons = "No transaction exists for this listing yet, so settlement cannot begin"
 
     steps.append({
         "step_type": "CASH_RELEASE",
         "sequence_position": 9,
         "required": True,
-        "complete": False,
-        "evidence_reference_type": None,
-        "evidence_reference_id": None,
+        "complete": cash_release_complete,
+        "evidence_reference_type": "SettlementRecord" if settlement_record is not None else None,
+        "evidence_reference_id": settlement_record.id if settlement_record is not None else None,
         "responsible_party": "third_party",
-        "completion_trigger": "M26's settlement/escrow pipeline releases cash to the holder",
-        "determinability": "cannot_determine",
-        "reasons": "KEVO has no settlement/escrow pipeline yet (M26 not built)",
-        "source_milestone": "M26 (not yet built)"
+        "completion_trigger": "Admin confirms (on the licensed escrow provider's behalf) that funds have been released",
+        "determinability": cash_release_determinability,
+        "reasons": cash_release_reasons,
+        "source_milestone": "M26 first slice (settlement status tracking, orchestration-only; KEVO never holds funds itself)"
     })
 
     return {
@@ -3993,6 +4033,158 @@ def get_rofr_request(
     if current_user.account_type != "admin" and current_user.id not in (transaction.buyer_id, transaction.seller_id):
         raise HTTPException(status_code=403, detail="You are not a party to this transaction")
     return rofr_request
+
+
+# ---------------------------------------------------------------------------
+# M26 (first slice) -- Settlement status tracking, orchestration-only
+#
+# KEVO never holds client funds or acts as custodian -- that would create
+# real money-transmitter and (per the California DFPI Escrow Law example
+# already researched, see claude/kevo-automation-first-features-assessment.md)
+# potentially state escrow-licensing exposure. This tracks the real-world
+# confirmations a licensed escrow/bank provider would report once KEVO
+# integrates with one -- it does not move money itself.
+#
+# Every field is admin-recorded, because until a real provider integration
+# exists, these are facts only KEVO's own team can attest to -- a buyer or
+# seller can never self-declare "funds received." Release is deliberately
+# sequential, not atomic: funds can only be released once both conditions
+# (funds received AND shares confirmed transferable) are independently
+# confirmed true. True delivery-versus-payment is M26E's scope, built on
+# top of this table, not this first slice's.
+# ---------------------------------------------------------------------------
+
+@app.post("/settlement-records")
+def create_settlement_record(
+    transaction_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can begin settlement tracking for a transaction")
+    transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if transaction is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if transaction.status != "accepted":
+        raise HTTPException(status_code=400, detail="Transaction must be in 'accepted' status to begin settlement")
+    existing = db.query(SettlementRecord).filter(SettlementRecord.transaction_id == transaction_id).first()
+    if existing is not None:
+        raise HTTPException(status_code=400, detail="A settlement record already exists for this transaction")
+    settlement_record = SettlementRecord(
+        transaction_id=transaction_id,
+        status="pending"
+    )
+    transaction.status = "settlement_pending"
+    db.add(settlement_record)
+    db.commit()
+    db.refresh(settlement_record)
+    return settlement_record
+
+
+@app.put("/settlement-records/{settlement_record_id}/confirm-funds-received")
+def confirm_funds_received(
+    settlement_record_id: int,
+    escrow_provider_reference: str | None = None,
+    notes: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can confirm funds received")
+    settlement_record = db.query(SettlementRecord).filter(SettlementRecord.id == settlement_record_id).first()
+    if settlement_record is None:
+        raise HTTPException(status_code=404, detail="Settlement record not found")
+    settlement_record.funds_received = True
+    settlement_record.funds_received_at = datetime.utcnow()
+    if escrow_provider_reference is not None:
+        settlement_record.escrow_provider_reference = escrow_provider_reference
+    if notes is not None:
+        settlement_record.notes = notes
+    if settlement_record.status == "pending":
+        settlement_record.status = "in_progress"
+    db.commit()
+    db.refresh(settlement_record)
+    return settlement_record
+
+
+@app.put("/settlement-records/{settlement_record_id}/confirm-shares-transferable")
+def confirm_shares_transferable(
+    settlement_record_id: int,
+    notes: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can confirm shares are transferable")
+    settlement_record = db.query(SettlementRecord).filter(SettlementRecord.id == settlement_record_id).first()
+    if settlement_record is None:
+        raise HTTPException(status_code=404, detail="Settlement record not found")
+    settlement_record.shares_confirmed_transferable = True
+    settlement_record.shares_confirmed_transferable_at = datetime.utcnow()
+    if notes is not None:
+        settlement_record.notes = notes
+    if settlement_record.status == "pending":
+        settlement_record.status = "in_progress"
+    db.commit()
+    db.refresh(settlement_record)
+    return settlement_record
+
+
+@app.put("/settlement-records/{settlement_record_id}/release-funds")
+def release_settlement_funds(
+    settlement_record_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can release settlement funds")
+    settlement_record = db.query(SettlementRecord).filter(SettlementRecord.id == settlement_record_id).first()
+    if settlement_record is None:
+        raise HTTPException(status_code=404, detail="Settlement record not found")
+    if not (settlement_record.funds_received and settlement_record.shares_confirmed_transferable):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot release funds until both funds_received and shares_confirmed_transferable are confirmed"
+        )
+    settlement_record.funds_released = True
+    settlement_record.funds_released_at = datetime.utcnow()
+    settlement_record.status = "completed"
+    transaction = db.query(Transaction).filter(Transaction.id == settlement_record.transaction_id).first()
+    if transaction is not None and transaction.status == "settlement_pending":
+        transaction.status = "completed"
+    db.commit()
+    db.refresh(settlement_record)
+    return settlement_record
+
+
+@app.get("/settlement-records")
+def get_settlement_records(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type == "admin":
+        return db.query(SettlementRecord).all()
+    own_transaction_ids = [
+        t.id for t in db.query(Transaction).filter(
+            (Transaction.buyer_id == current_user.id) | (Transaction.seller_id == current_user.id)
+        ).all()
+    ]
+    return db.query(SettlementRecord).filter(SettlementRecord.transaction_id.in_(own_transaction_ids)).all()
+
+
+@app.get("/settlement-records/{settlement_record_id}")
+def get_settlement_record(
+    settlement_record_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    settlement_record = db.query(SettlementRecord).filter(SettlementRecord.id == settlement_record_id).first()
+    if settlement_record is None:
+        raise HTTPException(status_code=404, detail="Settlement record not found")
+    transaction = db.query(Transaction).filter(Transaction.id == settlement_record.transaction_id).first()
+    if current_user.account_type != "admin" and current_user.id not in (transaction.buyer_id, transaction.seller_id):
+        raise HTTPException(status_code=403, detail="You are not a party to this transaction")
+    return settlement_record
 
 
 # ---------------------------------------------------------------------------
