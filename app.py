@@ -18,7 +18,7 @@ import jwt
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral
 from models import Transaction
 app = FastAPI(title="KEVO API")
 
@@ -4340,6 +4340,145 @@ def get_loan_request(
     if current_user.account_type != "admin" and loan_request.holder_id != current_user.id:
         raise HTTPException(status_code=403, detail="You do not have access to this loan request")
     return loan_request
+
+
+# ---------------------------------------------------------------------------
+# M26D — Option Exercise Funding (first slice: referral/tracking only)
+# Research found this is NOT a lighter version of M26B: real providers use
+# a prepaid variable forward contract (the same instrument class that got
+# M25B parked) and comply with securities law via their own registered
+# broker-dealer subsidiary. KEVO builds none of that here - this only
+# tracks that a holder asked for a referral and was pointed at a named,
+# real, already-licensed external provider. KEVO originates nothing,
+# structures nothing, and holds no interest in the outcome.
+# ---------------------------------------------------------------------------
+
+@app.post("/option-funding-referrals")
+def create_option_funding_referral(
+    company: str,
+    notes: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    referral = OptionFundingReferral(
+        holder_id=current_user.id,
+        company=company,
+        notes=notes,
+        status="requested"
+    )
+    db.add(referral)
+    db.commit()
+    db.refresh(referral)
+    return referral
+
+
+@app.put("/option-funding-referrals/{referral_id}/withdraw")
+def withdraw_option_funding_referral(
+    referral_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    referral = db.query(OptionFundingReferral).filter(OptionFundingReferral.id == referral_id).first()
+    if referral is None:
+        raise HTTPException(status_code=404, detail="Option funding referral not found")
+    if referral.holder_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only withdraw your own referral request")
+    if referral.status != "requested":
+        raise HTTPException(status_code=400, detail="Only a referral request still in 'requested' status can be withdrawn")
+    referral.status = "withdrawn"
+    db.commit()
+    db.refresh(referral)
+    return referral
+
+
+@app.put("/option-funding-referrals/{referral_id}/refer")
+def refer_option_funding_referral(
+    referral_id: int,
+    referred_provider_name: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can record a referral to a real external provider")
+    referral = db.query(OptionFundingReferral).filter(OptionFundingReferral.id == referral_id).first()
+    if referral is None:
+        raise HTTPException(status_code=404, detail="Option funding referral not found")
+    if referral.status != "requested":
+        raise HTTPException(status_code=400, detail="Only a referral request still in 'requested' status can be referred")
+    referral.referred_provider_name = referred_provider_name
+    referral.referred_at = datetime.utcnow()
+    referral.status = "referred"
+    db.commit()
+    db.refresh(referral)
+    return referral
+
+
+@app.put("/option-funding-referrals/{referral_id}/decline")
+def decline_option_funding_referral(
+    referral_id: int,
+    notes: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can decline a referral request")
+    referral = db.query(OptionFundingReferral).filter(OptionFundingReferral.id == referral_id).first()
+    if referral is None:
+        raise HTTPException(status_code=404, detail="Option funding referral not found")
+    if referral.status != "requested":
+        raise HTTPException(status_code=400, detail="Only a referral request still in 'requested' status can be declined")
+    referral.status = "declined"
+    if notes is not None:
+        referral.notes = notes
+    db.commit()
+    db.refresh(referral)
+    return referral
+
+
+@app.put("/option-funding-referrals/{referral_id}/close")
+def close_option_funding_referral(
+    referral_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can close a referral")
+    referral = db.query(OptionFundingReferral).filter(OptionFundingReferral.id == referral_id).first()
+    if referral is None:
+        raise HTTPException(status_code=404, detail="Option funding referral not found")
+    if referral.status != "referred":
+        raise HTTPException(status_code=400, detail="Only a referred request can be closed")
+    referral.status = "closed"
+    referral.closed_at = datetime.utcnow()
+    db.commit()
+    db.refresh(referral)
+    return referral
+
+
+@app.get("/option-funding-referrals")
+def get_option_funding_referrals(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type == "admin":
+        referrals = db.query(OptionFundingReferral).all()
+    else:
+        referrals = db.query(OptionFundingReferral).filter(OptionFundingReferral.holder_id == current_user.id).all()
+    return referrals
+
+
+@app.get("/option-funding-referrals/{referral_id}")
+def get_option_funding_referral(
+    referral_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    referral = db.query(OptionFundingReferral).filter(OptionFundingReferral.id == referral_id).first()
+    if referral is None:
+        raise HTTPException(status_code=404, detail="Option funding referral not found")
+    if current_user.account_type != "admin" and referral.holder_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You do not have access to this referral")
+    return referral
 
 
 # ---------------------------------------------------------------------------
