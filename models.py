@@ -434,3 +434,29 @@ class LiquidityPathStep(Base):
     reasons = Column(String(500), nullable=False)
     source_milestone = Column(String(100), nullable=True)
 
+
+class RofrRequest(Base):
+    """
+    M25 (first slice) - Right of First Refusal, consent request + response
+    log. Deliberately NOT deadline-driven: no jurisdiction has a real,
+    sourced ROFR response-window on file (TransferabilityRule.hold_period_days
+    means something different - time held before sale, not time to
+    respond to a ROFR notice - and is empty for the one real ROFR rule
+    that exists, ZA-COMPANIES-S8-ROFR-CONSENT). Also deliberately avoids
+    an auto-triggered countdown, the specific mechanism flagged as
+    patent-adjacent in claude/kevo-m25-rofr-patent-claim-analysis.md
+    (Nasdaq Private Market US 12,572,980). KEVO has no "issuer" or
+    "existing shareholder" user concept yet, so this follows the same
+    self-submit/admin-verify pattern already used for Evidence, KYCFact,
+    and OwnershipRecord: the seller (who actually needs the consent)
+    submits the request; only an admin can record the real-world response.
+    """
+    __tablename__ = "rofr_requests"
+
+    id = Column(Integer, primary_key=True)
+    transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=False)
+    transferability_rule_id = Column(Integer, ForeignKey("transferability_rules.id"), nullable=False)
+    status = Column(String(50), nullable=False, default="pending")
+    response_notes = Column(String(1000), nullable=True)
+    responded_at = Column(DateTime, nullable=True)
+    source_reference = Column(String(500), nullable=True)
