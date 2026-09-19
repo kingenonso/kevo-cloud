@@ -3890,6 +3890,123 @@ def get_risk_radar(
 
 
 # ---------------------------------------------------------------------------
+# Liquidity Friction Indicator (first slice)
+# Not a price, valuation, or discount estimate - KEVO still has no real
+# transaction volume to back one (unchanged since the M16 critical
+# assessment). Packages what M14 (Transferability Engine) and M15
+# (Liquidity Path Engine) already know about a specific listing into an
+# explained illiquidity-friction readout. No competitor researched
+# (Hiive, Forge, Caplight, NPM) structures legal/procedural friction into
+# pricing at the position level - this data already exists in KEVO, built
+# for compliance reasons, never packaged as a market-facing signal before.
+# Nothing persisted; recomputed live on every call, same pattern as
+# build_deal_health() and build_risk_radar().
+# ---------------------------------------------------------------------------
+
+def build_liquidity_friction_profile(listing, db):
+    transferability_result = evaluate_transferability(listing, db)
+    path_result = build_liquidity_path(listing, db)
+    steps = path_result["steps"]
+
+    breakdown = {
+        "known_complete": 0,
+        "known_incomplete": 0,
+        "required_but_unverified": 0,
+        "cannot_determine": 0
+    }
+    for step in steps:
+        determinability = step["determinability"]
+        if determinability in breakdown:
+            breakdown[determinability] += 1
+
+    rofr_step = None
+    for step in steps:
+        if step["step_type"] == "ISSUER_APPROVAL_ROFR":
+            rofr_step = step
+
+    main_constraint = None
+    main_constraint_reason = None
+
+    if transferability_result["status"] == "blocked":
+        main_constraint = "legal_transferability"
+        main_constraint_reason = "; ".join(transferability_result["reasons"])
+    elif rofr_step is not None and rofr_step["determinability"] in ("required_but_unverified", "known_incomplete"):
+        main_constraint = "rofr_consent"
+        main_constraint_reason = rofr_step["reasons"]
+    elif transferability_result["status"] in ("needs_evidence", "review", "conflict"):
+        main_constraint = "legal_transferability"
+        main_constraint_reason = "; ".join(transferability_result["reasons"])
+    else:
+        unresolved_steps = [
+            s for s in steps
+            if s["determinability"] in ("known_incomplete", "required_but_unverified")
+        ]
+        if unresolved_steps:
+            unresolved_steps.sort(key=lambda s: s["sequence_position"])
+            main_constraint = unresolved_steps[0]["step_type"]
+            main_constraint_reason = unresolved_steps[0]["reasons"]
+
+    summary = (
+        str(breakdown["known_complete"]) + " of " + str(len(steps)) +
+        " liquidity-path steps confirmed complete; " +
+        str(breakdown["required_but_unverified"]) + " required but unverified; " +
+        str(breakdown["known_incomplete"]) + " known incomplete; " +
+        str(breakdown["cannot_determine"]) + " cannot currently be determined"
+    )
+
+    return {
+        "summary": summary,
+        "steps_breakdown": breakdown,
+        "main_constraint": main_constraint,
+        "main_constraint_reason": main_constraint_reason,
+        "transferability": {
+            "status": transferability_result["status"],
+            "explanation": "; ".join(transferability_result["reasons"]),
+            "path_to_eligibility": transferability_result["path_to_eligibility"],
+            "forecast_date": transferability_result["forecast_date"]
+        },
+        "rofr": {
+            "determinability": rofr_step["determinability"] if rofr_step else "cannot_determine",
+            "complete": rofr_step["complete"] if rofr_step else False,
+            "reasons": rofr_step["reasons"] if rofr_step else "ROFR step not available"
+        },
+        "steps": steps,
+        "disclaimer": "This is not a price, valuation, or discount estimate. It describes how much legal and procedural friction currently stands between this listing and a completed sale, based on KEVO's own transferability and liquidity-path data. Recomputed fresh on every request, not a stored quote."
+    }
+
+
+@app.get("/liquidity-friction/listing/{listing_id}")
+def get_liquidity_friction(
+    listing_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    listing = db.query(ListingModel).filter(
+        ListingModel.id == listing_id
+    ).first()
+
+    if listing is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Listing not found"
+        )
+
+    result = build_liquidity_friction_profile(listing, db)
+
+    return {
+        "listing_id": listing.id,
+        "summary": result["summary"],
+        "steps_breakdown": result["steps_breakdown"],
+        "main_constraint": result["main_constraint"],
+        "main_constraint_reason": result["main_constraint_reason"],
+        "transferability": result["transferability"],
+        "rofr": result["rofr"],
+        "steps": result["steps"],
+        "disclaimer": result["disclaimer"]
+    }
+
+
+# ---------------------------------------------------------------------------
 # M24 (first slice) — KEVO Deal Room
 # A read-only aggregator over data that already exists elsewhere in the
 # API - participants, the live compliance verdict, ownership status,
