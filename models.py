@@ -493,3 +493,30 @@ class SettlementRecord(Base):
     funds_released_at = Column(DateTime, nullable=True)
     notes = Column(String(1000), nullable=True)
 
+
+class LoanRequest(Base):
+    """
+    M26B (first slice) - Share-backed lending, broker/matcher only.
+
+    KEVO never originates a loan, never funds one, and never takes or holds
+    the collateral itself - a holder's shares stay exactly where they
+    already are. This table tracks a holder's request to borrow against
+    verified shares through to a real, licensed external lender: KEVO
+    connects and tracks, it does not lend. Matching to a real lender
+    (name/reference) and closing the record are admin-recorded, mirroring
+    SettlementRecord's pattern - these are facts only KEVO's own team can
+    attest to until a real lender integration exists.
+    """
+    __tablename__ = "loan_requests"
+
+    id = Column(Integer, primary_key=True)
+    holder_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    ownership_record_id = Column(Integer, ForeignKey("ownership_records.id"), nullable=False)
+    requested_amount = Column(Numeric(15, 2), nullable=False)
+    status = Column(String(50), nullable=False, default="requested")
+    external_lender_name = Column(String(255), nullable=True)
+    external_lender_reference = Column(String(255), nullable=True)
+    matched_at = Column(DateTime, nullable=True)
+    closed_at = Column(DateTime, nullable=True)
+    notes = Column(String(1000), nullable=True)
+
