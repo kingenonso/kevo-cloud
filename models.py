@@ -92,6 +92,22 @@ class Transaction(Base):
         default="interested"
     )
 
+    # M26C (2026-09-19): KEVO deliberately does not attempt to handle
+    # cross-currency FX risk itself - dedicated research found the closest
+    # real precedent (EquityZen) sidesteps the problem the same way: every
+    # transaction settles in a single currency, and any conversion a
+    # non-USD party needs happens at their own bank, entirely outside
+    # KEVO. This column makes that already-implicit assumption explicit
+    # and queryable for the first time, rather than leaving it undefined.
+    # Deliberately fixed, not derived from listing/buyer/seller
+    # jurisdiction - introducing a currency-per-jurisdiction mapping would
+    # recreate the FX-tracking problem this design choice avoids.
+    settlement_currency = Column(
+        String(3),
+        nullable=False,
+        default="USD"
+    )
+
 class BuyerInterest(Base):
     __tablename__ = "buyer_interests"
 

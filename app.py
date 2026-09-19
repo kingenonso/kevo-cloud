@@ -1097,7 +1097,8 @@ def create_transaction(
         seller_id=listing.seller_id,
         quantity=transaction.quantity,
         agreed_price=transaction.agreed_price,
-        status="interested"
+        status="interested",
+        settlement_currency="USD"
     )
 
     db.add(new_transaction)
@@ -1113,7 +1114,8 @@ def create_transaction(
             "seller_id": new_transaction.seller_id,
             "quantity": new_transaction.quantity,
             "agreed_price": new_transaction.agreed_price,
-            "status": new_transaction.status
+            "status": new_transaction.status,
+            "settlement_currency": new_transaction.settlement_currency
         }
     }
 
@@ -1135,7 +1137,8 @@ def get_transactions(db: Session = Depends(get_db), current_user: UserModel = De
             "seller_id": t.seller_id,
             "quantity": t.quantity,
             "agreed_price": t.agreed_price,
-            "status": t.status
+            "status": t.status,
+            "settlement_currency": t.settlement_currency
         }
         for t in transactions
     ]
@@ -1171,7 +1174,8 @@ def get_transaction(
             "seller_id": transaction.seller_id,
             "quantity": transaction.quantity,
             "agreed_price": transaction.agreed_price,
-            "status": transaction.status
+            "status": transaction.status,
+            "settlement_currency": transaction.settlement_currency
         }
     }      
 
@@ -1494,7 +1498,8 @@ def update_transaction_status(
             "seller_id": transaction.seller_id,
             "quantity": transaction.quantity,
             "agreed_price": transaction.agreed_price,
-            "status": transaction.status
+            "status": transaction.status,
+            "settlement_currency": transaction.settlement_currency
         }
     }    
 
@@ -3898,7 +3903,8 @@ def get_deal_room(
             "listing_id": transaction.listing_id,
             "quantity": transaction.quantity,
             "agreed_price": transaction.agreed_price,
-            "status": transaction.status
+            "status": transaction.status,
+            "settlement_currency": transaction.settlement_currency
         },
         "participants": {
             "buyer": {"id": buyer.id, "role": buyer.role},
