@@ -18,7 +18,7 @@ import jwt
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest
 from models import Transaction
 app = FastAPI(title="KEVO API")
 
@@ -3883,6 +3883,116 @@ def get_deal_room(
             "steps": liquidity_path["steps"]
         }
     }
+
+
+# ---------------------------------------------------------------------------
+# M25 (first slice) -- Right of First Refusal (ROFR): consent request + response log
+#
+# Deliberately NOT deadline-driven: no jurisdiction has a real, sourced ROFR
+# response-window on file. TransferabilityRule.hold_period_days means
+# something different (days held before sale is legally permitted, not days
+# to respond to a ROFR notice) and is empty for the one real ROFR rule that
+# exists (ZA-COMPANIES-S8-ROFR-CONSENT). Also deliberately avoids an
+# auto-triggered countdown -- the specific mechanism flagged as
+# patent-adjacent in claude/kevo-m25-rofr-patent-claim-analysis.md
+# (Nasdaq Private Market US 12,572,980).
+#
+# KEVO has no "issuer" or "existing shareholder" user concept yet, so this
+# follows the same self-submit/admin-verify pattern already used for
+# Evidence, KYCFact, and OwnershipRecord: the seller (who actually needs the
+# consent) submits the request; only an admin records the real-world
+# response.
+# ---------------------------------------------------------------------------
+
+class RofrRequestCreate(BaseModel):
+    transaction_id: int
+    transferability_rule_id: int
+    source_reference: str | None = None
+
+
+@app.post("/rofr-requests")
+def create_rofr_request(
+    payload: RofrRequestCreate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    transaction = db.query(Transaction).filter(Transaction.id == payload.transaction_id).first()
+    if transaction is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if current_user.account_type != "admin" and current_user.id != transaction.seller_id:
+        raise HTTPException(status_code=403, detail="Only the seller or an admin can submit a ROFR request for this transaction")
+    rule = db.query(TransferabilityRule).filter(TransferabilityRule.id == payload.transferability_rule_id).first()
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Transferability rule not found")
+    listing = db.query(ListingModel).filter(ListingModel.id == transaction.listing_id).first()
+    if listing is None:
+        raise HTTPException(status_code=404, detail="Listing not found for this transaction")
+    applicable_rules = find_applicable_transferability_rules(listing, db)
+    if rule.id not in [r.id for r in applicable_rules]:
+        raise HTTPException(status_code=400, detail="This transferability rule does not apply to this transaction's listing")
+    rofr_request = RofrRequest(
+        transaction_id=transaction.id,
+        transferability_rule_id=rule.id,
+        status="pending",
+        source_reference=payload.source_reference
+    )
+    db.add(rofr_request)
+    db.commit()
+    db.refresh(rofr_request)
+    return rofr_request
+
+
+@app.put("/rofr-requests/{rofr_request_id}/respond")
+def respond_to_rofr_request(
+    rofr_request_id: int,
+    status: str,
+    response_notes: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can record a ROFR response")
+    rofr_request = db.query(RofrRequest).filter(RofrRequest.id == rofr_request_id).first()
+    if rofr_request is None:
+        raise HTTPException(status_code=404, detail="ROFR request not found")
+    if status not in ("approved", "waived", "exercised"):
+        raise HTTPException(status_code=400, detail="status must be one of: approved, waived, exercised")
+    rofr_request.status = status
+    rofr_request.response_notes = response_notes
+    rofr_request.responded_at = datetime.utcnow()
+    db.commit()
+    db.refresh(rofr_request)
+    return rofr_request
+
+
+@app.get("/rofr-requests")
+def get_rofr_requests(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type == "admin":
+        return db.query(RofrRequest).all()
+    own_transaction_ids = [
+        t.id for t in db.query(Transaction).filter(
+            (Transaction.buyer_id == current_user.id) | (Transaction.seller_id == current_user.id)
+        ).all()
+    ]
+    return db.query(RofrRequest).filter(RofrRequest.transaction_id.in_(own_transaction_ids)).all()
+
+
+@app.get("/rofr-requests/{rofr_request_id}")
+def get_rofr_request(
+    rofr_request_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    rofr_request = db.query(RofrRequest).filter(RofrRequest.id == rofr_request_id).first()
+    if rofr_request is None:
+        raise HTTPException(status_code=404, detail="ROFR request not found")
+    transaction = db.query(Transaction).filter(Transaction.id == rofr_request.transaction_id).first()
+    if current_user.account_type != "admin" and current_user.id not in (transaction.buyer_id, transaction.seller_id):
+        raise HTTPException(status_code=403, detail="You are not a party to this transaction")
+    return rofr_request
 
 
 # ---------------------------------------------------------------------------
