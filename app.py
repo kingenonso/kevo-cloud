@@ -14,13 +14,77 @@ from sqlalchemy.orm import Session
 import uuid
 import bcrypt
 import jwt
+import hashlib
+import json
 
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger
 from models import Transaction
 app = FastAPI(title="KEVO API")
+
+# M27 (first slice) - Hash-Chained Compliance Decision Ledger helpers.
+# GENESIS_HASH is the fixed starting point of the one global chain -
+# standard convention (all zeros) for a hash chain's first link.
+GENESIS_HASH = "0" * 64
+
+
+def _compute_ledger_entry_hash(previous_hash, transaction_id, buyer_id, listing_id,
+                                decision_status, explanation, applicable_rule_codes_json,
+                                triggered_by, decided_at):
+    payload = "|".join([
+        previous_hash,
+        str(transaction_id),
+        str(buyer_id),
+        str(listing_id),
+        decision_status,
+        explanation or "",
+        applicable_rule_codes_json,
+        triggered_by,
+        decided_at.isoformat()
+    ])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def log_compliance_decision(transaction, buyer, listing, triggered_by, db):
+    """
+    M27: snapshot a real assess_compliance() verdict for a real transaction
+    at a real lifecycle moment, and append it to the global hash chain.
+    Purely informational - never raises, never blocks the caller's action.
+    """
+    compliance_result = assess_compliance(buyer, listing, db)
+
+    last_entry = db.query(ComplianceDecisionLedger).order_by(
+        ComplianceDecisionLedger.id.desc()
+    ).first()
+    previous_hash = last_entry.entry_hash if last_entry else GENESIS_HASH
+
+    decided_at = datetime.utcnow()
+    applicable_rule_codes_json = json.dumps(compliance_result.get("applicable_rule_codes") or [])
+
+    entry_hash = _compute_ledger_entry_hash(
+        previous_hash, transaction.id, buyer.id, listing.id,
+        compliance_result["status"], compliance_result.get("explanation"),
+        applicable_rule_codes_json, triggered_by, decided_at
+    )
+
+    entry = ComplianceDecisionLedger(
+        transaction_id=transaction.id,
+        buyer_id=buyer.id,
+        listing_id=listing.id,
+        decision_status=compliance_result["status"],
+        explanation=compliance_result.get("explanation"),
+        applicable_rule_codes=applicable_rule_codes_json,
+        triggered_by=triggered_by,
+        decided_at=decided_at,
+        previous_hash=previous_hash,
+        entry_hash=entry_hash
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
 app.state.limiter = limiter
@@ -1105,6 +1169,8 @@ def create_transaction(
     db.commit()
     db.refresh(new_transaction)
 
+    log_compliance_decision(new_transaction, buyer, listing, "transaction_created", db)
+
     return {
         "message": "Transaction created",
         "transaction": {
@@ -1488,6 +1554,11 @@ def update_transaction_status(
 
     db.commit()
     db.refresh(transaction)
+
+    ledger_buyer = db.query(UserModel).filter(UserModel.id == transaction.buyer_id).first()
+    ledger_listing = db.query(ListingModel).filter(ListingModel.id == transaction.listing_id).first()
+    if ledger_buyer is not None and ledger_listing is not None:
+        log_compliance_decision(transaction, ledger_buyer, ledger_listing, f"status_changed_to_{status}", db)
 
     return {
         "message": "Transaction status updated",
@@ -4482,6 +4553,120 @@ def get_option_funding_referral(
 
 
 # ---------------------------------------------------------------------------
+@app.get("/compliance-ledger/transaction/{transaction_id}")
+def get_compliance_ledger_for_transaction(
+    transaction_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if transaction is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    is_admin = current_user.account_type == "admin"
+    is_party = current_user.id in (transaction.buyer_id, transaction.seller_id)
+    if not (is_admin or is_party):
+        raise HTTPException(status_code=403, detail="You do not have access to this transaction's compliance ledger")
+
+    entries = db.query(ComplianceDecisionLedger).filter(
+        ComplianceDecisionLedger.transaction_id == transaction_id
+    ).order_by(ComplianceDecisionLedger.id.asc()).all()
+
+    result = []
+    for entry in entries:
+        recomputed = _compute_ledger_entry_hash(
+            entry.previous_hash, entry.transaction_id, entry.buyer_id, entry.listing_id,
+            entry.decision_status, entry.explanation, entry.applicable_rule_codes,
+            entry.triggered_by, entry.decided_at
+        )
+        result.append({
+            "id": entry.id,
+            "transaction_id": entry.transaction_id,
+            "buyer_id": entry.buyer_id,
+            "listing_id": entry.listing_id,
+            "decision_status": entry.decision_status,
+            "explanation": entry.explanation,
+            "applicable_rule_codes": json.loads(entry.applicable_rule_codes),
+            "triggered_by": entry.triggered_by,
+            "decided_at": entry.decided_at,
+            "previous_hash": entry.previous_hash,
+            "entry_hash": entry.entry_hash,
+            "hash_valid": recomputed == entry.entry_hash
+        })
+    return result
+
+
+@app.get("/compliance-ledger/verify")
+def verify_compliance_ledger(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can verify the full compliance decision ledger")
+
+    entries = db.query(ComplianceDecisionLedger).order_by(ComplianceDecisionLedger.id.asc()).all()
+
+    expected_previous_hash = GENESIS_HASH
+    first_invalid_entry_id = None
+
+    for entry in entries:
+        if entry.previous_hash != expected_previous_hash:
+            first_invalid_entry_id = entry.id
+            break
+        recomputed = _compute_ledger_entry_hash(
+            entry.previous_hash, entry.transaction_id, entry.buyer_id, entry.listing_id,
+            entry.decision_status, entry.explanation, entry.applicable_rule_codes,
+            entry.triggered_by, entry.decided_at
+        )
+        if recomputed != entry.entry_hash:
+            first_invalid_entry_id = entry.id
+            break
+        expected_previous_hash = entry.entry_hash
+
+    return {
+        "valid": first_invalid_entry_id is None,
+        "total_entries": len(entries),
+        "first_invalid_entry_id": first_invalid_entry_id
+    }
+
+
+@app.get("/compliance-ledger/{entry_id}")
+def get_compliance_ledger_entry(
+    entry_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    entry = db.query(ComplianceDecisionLedger).filter(ComplianceDecisionLedger.id == entry_id).first()
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Compliance ledger entry not found")
+
+    transaction = db.query(Transaction).filter(Transaction.id == entry.transaction_id).first()
+    is_admin = current_user.account_type == "admin"
+    is_party = transaction is not None and current_user.id in (transaction.buyer_id, transaction.seller_id)
+    if not (is_admin or is_party):
+        raise HTTPException(status_code=403, detail="You do not have access to this compliance ledger entry")
+
+    recomputed = _compute_ledger_entry_hash(
+        entry.previous_hash, entry.transaction_id, entry.buyer_id, entry.listing_id,
+        entry.decision_status, entry.explanation, entry.applicable_rule_codes,
+        entry.triggered_by, entry.decided_at
+    )
+    return {
+        "id": entry.id,
+        "transaction_id": entry.transaction_id,
+        "buyer_id": entry.buyer_id,
+        "listing_id": entry.listing_id,
+        "decision_status": entry.decision_status,
+        "explanation": entry.explanation,
+        "applicable_rule_codes": json.loads(entry.applicable_rule_codes),
+        "triggered_by": entry.triggered_by,
+        "decided_at": entry.decided_at,
+        "previous_hash": entry.previous_hash,
+        "entry_hash": entry.entry_hash,
+        "hash_valid": recomputed == entry.entry_hash
+    }
+
+
 # M16 — Demand Heatmap / Blind Demand Curve
 # Pure, read-only aggregation over BuyerInterest data KEVO already has.
 # No price synthesis of any kind — every value returned is a count or a
