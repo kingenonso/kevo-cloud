@@ -566,3 +566,37 @@ class OptionFundingReferral(Base):
     referred_at = Column(DateTime, nullable=True)
     closed_at = Column(DateTime, nullable=True)
 
+class ComplianceDecisionLedger(Base):
+    """
+    M27 (first slice) - Hash-Chained Compliance Decision Ledger.
+
+    Audit found real assess_compliance() decisions were never persisted
+    anywhere - every call (matching, transaction creation, Deal Health
+    Score, Deal Room, ROFR requests) computed live and was thrown away,
+    with no way to later prove what KEVO's system actually told a specific
+    buyer about a specific listing at a specific point in time. Also found:
+    compliance never actually gates a transaction today - create_transaction()
+    doesn't call assess_compliance() at all. So this table snapshots the real
+    compliance verdict at two real, meaningful transaction lifecycle moments -
+    creation and every status change - purely informational, never blocking,
+    preserving the standing no-trade-term-setting invariant (2026-09-09).
+    Each entry is cryptographically chained to the one immediately before it
+    across the whole platform (one global chain, not per-transaction), so the
+    decision history can be mathematically proven untampered - not just
+    logged. Append-only: no API endpoint writes to this table directly, only
+    internal application logic does, at the two trigger points above.
+    """
+    __tablename__ = "compliance_decision_ledger"
+
+    id = Column(Integer, primary_key=True)
+    transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=False)
+    buyer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    listing_id = Column(Integer, ForeignKey("listings.id"), nullable=False)
+    decision_status = Column(String(50), nullable=False)
+    explanation = Column(String(1000), nullable=True)
+    applicable_rule_codes = Column(String(500), nullable=False)
+    triggered_by = Column(String(100), nullable=False)
+    decided_at = Column(DateTime, nullable=False)
+    previous_hash = Column(String(64), nullable=False)
+    entry_hash = Column(String(64), nullable=False)
+
