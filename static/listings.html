@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KEVO — My Listings</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#0a0e17] min-h-screen text-slate-200 font-sans">
+
+  <header class="border-b border-slate-800 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="text-lg font-semibold tracking-widest uppercase text-white">KEVO</div>
+      <div class="h-4 w-px bg-slate-700"></div>
+      <div class="text-xs text-slate-500 uppercase tracking-wide">My Listings</div>
+    </div>
+    <nav class="flex items-center gap-6">
+      <a href="/app/dashboard.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Dashboard</a>
+      <a href="/app/listings.html" class="text-xs uppercase tracking-wide text-white">My Listings</a>
+    </nav>
+    <div class="flex items-center gap-4">
+      <span id="user-name" class="text-sm text-slate-400"></span>
+      <button id="logout-btn"
+        class="text-xs uppercase tracking-wide text-slate-500 hover:text-white border border-slate-700 hover:border-slate-500 px-3 py-1.5 transition-colors">
+        Log Out
+      </button>
+    </div>
+  </header>
+
+  <main class="max-w-3xl mx-auto px-6 py-10 space-y-10">
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Your Listings</div>
+      <div id="listings-loading" class="text-sm text-slate-500">Loading listings...</div>
+      <div id="listings-empty" class="hidden text-sm text-slate-500 border border-slate-800 bg-[#0d1220] p-6">
+        You have no listings yet. Create your first one below.
+      </div>
+      <div id="listings-table" class="hidden border border-slate-800 bg-[#0d1220]">
+        <div class="grid grid-cols-4 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
+          <div>Company</div>
+          <div>Asset Type</div>
+          <div>Quantity</div>
+          <div>Asking Price</div>
+        </div>
+        <div id="listings-rows"></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Create Listing</div>
+      <div class="border border-slate-800 bg-[#0d1220] p-6">
+        <form id="listing-form" class="space-y-4">
+
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="company">Company</label>
+              <input id="company" name="company" type="text" required
+                class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+            </div>
+            <div>
+              <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="asset_type">Asset Type</label>
+              <input id="asset_type" name="asset_type" type="text" required placeholder="e.g. common_stock"
+                class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="quantity">Quantity</label>
+              <input id="quantity" name="quantity" type="number" min="1" required
+                class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+            </div>
+            <div>
+              <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="asking_price">Asking Price ($)</label>
+              <input id="asking_price" name="asking_price" type="number" min="0" step="0.01" required
+                class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="issuer_jurisdiction">Issuer Jurisdiction (optional)</label>
+            <input id="issuer_jurisdiction" name="issuer_jurisdiction" type="text" placeholder="e.g. US"
+              class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+          </div>
+
+          <div class="flex items-center gap-2">
+            <input id="is_transferable" name="is_transferable" type="checkbox"
+              class="bg-black/30 border border-slate-700">
+            <label class="text-sm text-slate-400" for="is_transferable">Known to be transferable</label>
+          </div>
+
+          <div id="form-error" class="hidden text-sm text-red-400 border border-red-900 bg-red-950/40 px-3 py-2"></div>
+          <div id="form-success" class="hidden text-sm text-green-400 border border-green-900 bg-green-950/40 px-3 py-2"></div>
+
+          <button type="submit" id="submit-btn"
+            class="bg-blue-600 hover:bg-blue-500 text-white text-sm uppercase tracking-wide py-2 px-6 transition-colors">
+            Create Listing
+          </button>
+
+        </form>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    const token = localStorage.getItem("kevo_token");
+
+    if (!token) {
+      window.location.href = "/app/";
+    }
+
+    let myId = null;
+
+    async function loadMe() {
+      const response = await fetch("/me", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+
+      const user = await response.json();
+      myId = user.id;
+      document.getElementById("user-name").textContent = user.name;
+    }
+
+    async function loadListings() {
+      const response = await fetch("/listings", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+
+      const allListings = await response.json();
+      const mine = allListings.filter(function (listing) {
+        return listing.seller_id === myId;
+      });
+
+      document.getElementById("listings-loading").classList.add("hidden");
+
+      if (mine.length === 0) {
+        document.getElementById("listings-empty").classList.remove("hidden");
+        document.getElementById("listings-table").classList.add("hidden");
+        return;
+      }
+
+      const rowsContainer = document.getElementById("listings-rows");
+      rowsContainer.innerHTML = "";
+
+      mine.forEach(function (listing) {
+        const row = document.createElement("div");
+        row.className = "grid grid-cols-4 gap-4 px-6 py-3 border-b border-slate-800 text-sm last:border-b-0";
+        row.innerHTML =
+          '<div class="text-white">' + listing.company + '</div>' +
+          '<div class="font-mono text-slate-300">' + listing.asset_type + '</div>' +
+          '<div class="font-mono text-slate-300">' + listing.quantity + '</div>' +
+          '<div class="font-mono text-slate-300">$' + listing.asking_price.toLocaleString() + '</div>';
+        rowsContainer.appendChild(row);
+      });
+
+      document.getElementById("listings-empty").classList.add("hidden");
+      document.getElementById("listings-table").classList.remove("hidden");
+    }
+
+    document.getElementById("listing-form").addEventListener("submit", async function (event) {
+      event.preventDefault();
+
+      const errorBox = document.getElementById("form-error");
+      const successBox = document.getElementById("form-success");
+      errorBox.classList.add("hidden");
+      successBox.classList.add("hidden");
+
+      const payload = {
+        seller_id: myId,
+        company: document.getElementById("company").value,
+        asset_type: document.getElementById("asset_type").value,
+        quantity: parseInt(document.getElementById("quantity").value, 10),
+        asking_price: parseFloat(document.getElementById("asking_price").value),
+        issuer_jurisdiction: document.getElementById("issuer_jurisdiction").value || null,
+        is_transferable: document.getElementById("is_transferable").checked
+      };
+
+      try {
+        const response = await fetch("/listings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + token
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (response.ok) {
+          successBox.textContent = "Listing created.";
+          successBox.classList.remove("hidden");
+          document.getElementById("listing-form").reset();
+          await loadListings();
+          return;
+        }
+
+        const data = await response.json();
+        errorBox.textContent = data.detail || "Could not create listing.";
+        errorBox.classList.remove("hidden");
+      } catch (err) {
+        errorBox.textContent = "Could not reach the server.";
+        errorBox.classList.remove("hidden");
+      }
+    });
+
+    document.getElementById("logout-btn").addEventListener("click", function () {
+      localStorage.removeItem("kevo_token");
+      window.location.href = "/app/";
+    });
+
+    async function init() {
+      await loadMe();
+      await loadListings();
+    }
+
+    init();
+  </script>
+
+</body>
+</html>
