@@ -600,3 +600,57 @@ class ComplianceDecisionLedger(Base):
     previous_hash = Column(String(64), nullable=False)
     entry_hash = Column(String(64), nullable=False)
 
+
+
+class TenderOfferProgram(Base):
+    """
+    M30B (first slice) - Company-Sponsored Tender Offer Program.
+    KEVO has no "company"/"issuer" login-capable actor (confirmed by direct
+    audit, 2026-09-20) and building one was confirmed out of scope for this
+    milestone. Follows the same admin-administered pattern already used for
+    RofrRequest and SettlementRecord: an admin creates and manages a program
+    on a real company's behalf, recording price/window/eligibility the
+    company already agreed to outside the platform - KEVO never sets or
+    suggests these terms itself, preserving the standing no-trade-term-
+    setting invariant (2026-09-09). Jurisdictional research (2026-09-20,
+    claude/kevo-m30b-tender-offer-program-research-and-audit.md) found this
+    is fundamentally a corporate-governance matter (a resolution the company
+    and its shareholders make themselves) in 5 of KEVO's 6 active
+    jurisdictions - Canada is deliberately excluded (enforced in app.py, not
+    here) since it currently lacks a clean small-private-company issuer-bid
+    exemption; the CSA's proposed Selective Repurchase Exemption is not yet
+    in force.
+    """
+    __tablename__ = "tender_offer_programs"
+
+    id = Column(Integer, primary_key=True)
+    company = Column(String(255), nullable=False)
+    jurisdiction = Column(String(100), nullable=False)
+    price_per_share = Column(Numeric(15, 2), nullable=False)
+    opens_at = Column(DateTime, nullable=False)
+    closes_at = Column(DateTime, nullable=False)
+    status = Column(String(50), nullable=False, default="open")
+    source_reference = Column(String(500), nullable=True)
+    created_at = Column(DateTime, nullable=False)
+
+
+class TenderOfferElection(Base):
+    """
+    M30B (first slice) - a holder's election to participate in a
+    TenderOfferProgram. Self-submit by the holder (mirroring
+    LoanRequest/OptionFundingReferral), gated on the same verified-ownership
+    check M13/M26B already enforce elsewhere. shares_accepted stays null
+    until an admin finalizes the election, recording the company's own real
+    allocation decision - KEVO never computes or suggests an allocation.
+    """
+    __tablename__ = "tender_offer_elections"
+
+    id = Column(Integer, primary_key=True)
+    program_id = Column(Integer, ForeignKey("tender_offer_programs.id"), nullable=False)
+    ownership_record_id = Column(Integer, ForeignKey("ownership_records.id"), nullable=False)
+    holder_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    shares_offered = Column(Integer, nullable=False)
+    shares_accepted = Column(Integer, nullable=True)
+    status = Column(String(50), nullable=False, default="pending")
+    created_at = Column(DateTime, nullable=False)
+    decided_at = Column(DateTime, nullable=True)
