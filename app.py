@@ -21,7 +21,7 @@ import json
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection
 from models import Transaction
 app = FastAPI(title="KEVO API")
 
@@ -5242,3 +5242,235 @@ def get_liquidity_aggregation(
     db: Session = Depends(get_db)
 ):
     return build_liquidity_aggregation(company, asset_type, db)
+
+
+# ---------------------------------------------------------------------------
+# M30B — Company-Sponsored Tender Offer Program (first slice)
+# KEVO has no "company"/"issuer" login-capable actor (confirmed by direct
+# audit, 2026-09-20) and building one was confirmed out of scope. Follows
+# the same admin-administered pattern already used for RofrRequest and
+# SettlementRecord: an admin creates and manages a program on a real
+# company's behalf, recording price/window/eligibility the company already
+# agreed to outside the platform. KEVO never sets, suggests, or computes
+# an allocation - the admin records the company's own real decision,
+# preserving the standing no-trade-term-setting invariant (2026-09-09).
+# Jurisdictional research (claude/kevo-m30b-tender-offer-program-research-
+# and-audit.md) found Canada currently lacks a clean small-private-company
+# issuer-bid exemption, so Canada is deliberately excluded here - the CSA's
+# proposed Selective Repurchase Exemption is not yet in force.
+# ---------------------------------------------------------------------------
+
+TENDER_OFFER_EXCLUDED_JURISDICTIONS = {"Canada"}
+
+
+@app.post("/tender-offer-programs")
+def create_tender_offer_program(
+    company: str,
+    jurisdiction: str,
+    price_per_share: float,
+    opens_at: datetime,
+    closes_at: datetime,
+    source_reference: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can create a tender offer program")
+    if jurisdiction in TENDER_OFFER_EXCLUDED_JURISDICTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Canada is not yet supported for tender offer programs - current Canadian securities law lacks a clean small-private-company issuer-bid exemption for this"
+        )
+    if price_per_share <= 0:
+        raise HTTPException(status_code=400, detail="Price per share must be greater than zero")
+    if closes_at <= opens_at:
+        raise HTTPException(status_code=400, detail="Closing time must be after opening time")
+    program = TenderOfferProgram(
+        company=company,
+        jurisdiction=jurisdiction,
+        price_per_share=price_per_share,
+        opens_at=opens_at,
+        closes_at=closes_at,
+        status="open",
+        source_reference=source_reference,
+        created_at=datetime.utcnow()
+    )
+    db.add(program)
+    db.commit()
+    db.refresh(program)
+    return program
+
+
+@app.get("/tender-offer-programs")
+def get_tender_offer_programs(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type == "admin":
+        return db.query(TenderOfferProgram).all()
+    eligible_companies = {
+        row.company for row in db.query(OwnershipRecord).filter(
+            OwnershipRecord.seller_id == current_user.id,
+            OwnershipRecord.verification_status == "verified"
+        ).all()
+    }
+    if not eligible_companies:
+        return []
+    return db.query(TenderOfferProgram).filter(TenderOfferProgram.company.in_(eligible_companies)).all()
+
+
+@app.get("/tender-offer-programs/{program_id}")
+def get_tender_offer_program(
+    program_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    program = db.query(TenderOfferProgram).filter(TenderOfferProgram.id == program_id).first()
+    if program is None:
+        raise HTTPException(status_code=404, detail="Tender offer program not found")
+    if current_user.account_type == "admin":
+        return program
+    is_eligible = db.query(OwnershipRecord).filter(
+        OwnershipRecord.seller_id == current_user.id,
+        OwnershipRecord.company == program.company,
+        OwnershipRecord.verification_status == "verified"
+    ).first() is not None
+    if not is_eligible:
+        raise HTTPException(status_code=403, detail="You do not have a verified holding in this company")
+    return program
+
+
+@app.put("/tender-offer-programs/{program_id}/close")
+def close_tender_offer_program(
+    program_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can close a tender offer program")
+    program = db.query(TenderOfferProgram).filter(TenderOfferProgram.id == program_id).first()
+    if program is None:
+        raise HTTPException(status_code=404, detail="Tender offer program not found")
+    if program.status != "open":
+        raise HTTPException(status_code=400, detail="Only an open tender offer program can be closed")
+    program.status = "closed"
+    db.commit()
+    db.refresh(program)
+    return program
+
+
+@app.post("/tender-offer-elections")
+def create_tender_offer_election(
+    program_id: int,
+    ownership_record_id: int,
+    shares_offered: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    program = db.query(TenderOfferProgram).filter(TenderOfferProgram.id == program_id).first()
+    if program is None:
+        raise HTTPException(status_code=404, detail="Tender offer program not found")
+    if program.status != "open":
+        raise HTTPException(status_code=400, detail="This tender offer program is not open")
+    now = datetime.utcnow()
+    if now < program.opens_at or now > program.closes_at:
+        raise HTTPException(status_code=400, detail="This tender offer program's window is not currently open")
+    ownership_record = db.query(OwnershipRecord).filter(OwnershipRecord.id == ownership_record_id).first()
+    if ownership_record is None:
+        raise HTTPException(status_code=404, detail="Ownership record not found")
+    if ownership_record.seller_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only elect to participate using your own ownership record")
+    if ownership_record.verification_status != "verified":
+        raise HTTPException(status_code=400, detail="Ownership record must be verified before it can participate in a tender offer")
+    if ownership_record.company != program.company:
+        raise HTTPException(status_code=400, detail="This ownership record is not for the company running this tender offer program")
+    if shares_offered <= 0:
+        raise HTTPException(status_code=400, detail="Shares offered must be greater than zero")
+    if shares_offered > ownership_record.quantity:
+        raise HTTPException(status_code=400, detail="Shares offered cannot exceed the quantity on this ownership record")
+    election = TenderOfferElection(
+        program_id=program_id,
+        ownership_record_id=ownership_record_id,
+        holder_id=current_user.id,
+        shares_offered=shares_offered,
+        status="pending",
+        created_at=datetime.utcnow()
+    )
+    db.add(election)
+    db.commit()
+    db.refresh(election)
+    return election
+
+
+@app.put("/tender-offer-elections/{election_id}/withdraw")
+def withdraw_tender_offer_election(
+    election_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    election = db.query(TenderOfferElection).filter(TenderOfferElection.id == election_id).first()
+    if election is None:
+        raise HTTPException(status_code=404, detail="Tender offer election not found")
+    if election.holder_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only withdraw your own election")
+    if election.status != "pending":
+        raise HTTPException(status_code=400, detail="Only a pending election can be withdrawn")
+    election.status = "withdrawn"
+    election.decided_at = datetime.utcnow()
+    db.commit()
+    db.refresh(election)
+    return election
+
+
+@app.put("/tender-offer-elections/{election_id}/finalize")
+def finalize_tender_offer_election(
+    election_id: int,
+    accepted: bool,
+    shares_accepted: int | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can finalize a tender offer election")
+    election = db.query(TenderOfferElection).filter(TenderOfferElection.id == election_id).first()
+    if election is None:
+        raise HTTPException(status_code=404, detail="Tender offer election not found")
+    if election.status != "pending":
+        raise HTTPException(status_code=400, detail="Only a pending election can be finalized")
+    if accepted:
+        if shares_accepted is None or shares_accepted <= 0:
+            raise HTTPException(status_code=400, detail="shares_accepted is required and must be greater than zero when accepting")
+        if shares_accepted > election.shares_offered:
+            raise HTTPException(status_code=400, detail="shares_accepted cannot exceed the shares originally offered")
+        election.shares_accepted = shares_accepted
+        election.status = "accepted"
+    else:
+        election.status = "declined"
+    election.decided_at = datetime.utcnow()
+    db.commit()
+    db.refresh(election)
+    return election
+
+
+@app.get("/tender-offer-elections")
+def get_tender_offer_elections(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type == "admin":
+        return db.query(TenderOfferElection).all()
+    return db.query(TenderOfferElection).filter(TenderOfferElection.holder_id == current_user.id).all()
+
+
+@app.get("/tender-offer-elections/{election_id}")
+def get_tender_offer_election(
+    election_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    election = db.query(TenderOfferElection).filter(TenderOfferElection.id == election_id).first()
+    if election is None:
+        raise HTTPException(status_code=404, detail="Tender offer election not found")
+    if current_user.account_type != "admin" and election.holder_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You do not have access to this tender offer election")
+    return election
