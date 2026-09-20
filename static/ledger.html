@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KEVO — Compliance Ledger</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#0a0e17] min-h-screen text-slate-200 font-sans">
+
+  <header class="border-b border-slate-800 px-6 py-4 space-y-3">
+    <div class="flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="text-lg font-semibold tracking-widest uppercase text-white">KEVO</div>
+      <div class="h-4 w-px bg-slate-700"></div>
+      <div class="text-xs text-slate-500 uppercase tracking-wide">Compliance Ledger</div>
+    </div>
+    <div class="flex items-center gap-4">
+      <span id="user-name" class="text-sm text-slate-400"></span>
+      <button id="logout-btn"
+        class="text-xs uppercase tracking-wide text-slate-500 hover:text-white border border-slate-700 hover:border-slate-500 px-3 py-1.5 transition-colors">
+        Log Out
+      </button>
+    </div>
+    </div>
+    <nav class="flex items-center gap-x-6 gap-y-2 flex-wrap">
+      <a href="/app/dashboard.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Dashboard</a>
+      <a href="/app/listings.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">My Listings</a>
+      <a href="/app/browse.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Browse</a>
+      <a href="/app/market.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Market Intel</a>
+      <a href="/app/kyc.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">KYC / AML</a>
+      <a href="/app/transactions.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Transactions</a>
+      <a href="/app/rofr.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">ROFR</a>
+      <a href="/app/settlement.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Settlement</a>
+      <a href="/app/lending.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Lending</a>
+      <a href="/app/funding.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Funding</a>
+      <a href="/app/ledger.html" class="text-xs uppercase tracking-wide text-white">Ledger</a>
+    </nav>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-6 py-10 space-y-8">
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">View a Transaction's Compliance Decision Ledger</div>
+      <div class="border border-slate-800 bg-[#0d1220] p-6 space-y-4">
+        <p class="text-sm text-slate-400">Enter a transaction ID you are a party to (or any transaction, as admin) to see every compliance decision recorded for it, in order, with tamper-evidence.</p>
+        <div class="flex gap-3">
+          <input id="ledger-tx-id" type="number" placeholder="Transaction ID"
+            class="flex-1 bg-[#0a0e17] border border-slate-700 px-4 py-2 text-sm focus:outline-none focus:border-slate-500">
+          <button id="view-ledger-btn"
+            class="bg-blue-600 hover:bg-blue-500 text-white text-xs uppercase tracking-wide px-6 py-2 transition-colors">
+            View Ledger
+          </button>
+        </div>
+        <div id="ledger-msg" class="text-sm"></div>
+      </div>
+    </section>
+
+    <section id="ledger-results-section" class="hidden">
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Ledger Entries</div>
+      <div class="border border-slate-800 bg-[#0d1220]">
+        <div class="grid grid-cols-7 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
+          <div>ID</div>
+          <div>Decision</div>
+          <div>Rule Codes</div>
+          <div>Triggered By</div>
+          <div>Decided At</div>
+          <div>Explanation</div>
+          <div>Hash Valid</div>
+        </div>
+        <div id="ledger-rows"></div>
+      </div>
+    </section>
+
+    <section id="admin-verify-section" class="hidden">
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Admin: Verify Full Chain Integrity</div>
+      <div class="border border-slate-800 bg-[#0d1220] p-6 space-y-4">
+        <p class="text-sm text-slate-400">Walks the entire global hash chain from genesis and recomputes every entry's hash. Reports the first entry where the chain breaks, if any.</p>
+        <button id="verify-chain-btn"
+          class="border border-slate-700 hover:border-slate-500 text-slate-300 hover:text-white text-xs uppercase tracking-wide px-6 py-2 transition-colors">
+          Verify Full Chain
+        </button>
+        <div id="verify-result" class="text-sm"></div>
+      </div>
+    </section>
+
+  </main>
+
+<script>
+const token = localStorage.getItem("kevo_token");
+if (!token) window.location.href = "/app/";
+
+function authHeaders() {
+  return { "Authorization": "Bearer " + token };
+}
+
+function statusColor(status) {
+  if (status === "allowed") return "text-green-400";
+  if (status === "blocked") return "text-red-400";
+  if (status === "conditional") return "text-amber-400";
+  return "text-slate-400";
+}
+
+function badge(text, colorClass) {
+  return "<span class=\"" + colorClass + "\">" + text + "</span>";
+}
+
+async function loadMe() {
+  const res = await fetch("/me", { headers: authHeaders() });
+  if (res.status === 401) {
+    localStorage.removeItem("kevo_token");
+    window.location.href = "/app/";
+    return;
+  }
+  const data = await res.json();
+  document.getElementById("user-name").textContent = data.name;
+  const isAdmin = data.account_type === "admin";
+  if (isAdmin) {
+    document.getElementById("admin-verify-section").classList.remove("hidden");
+  }
+}
+
+document.getElementById("logout-btn").addEventListener("click", () => {
+  localStorage.removeItem("kevo_token");
+  window.location.href = "/app/";
+});
+
+document.getElementById("view-ledger-btn").addEventListener("click", async () => {
+  const txId = document.getElementById("ledger-tx-id").value;
+  const msgEl = document.getElementById("ledger-msg");
+  const resultsSection = document.getElementById("ledger-results-section");
+  const rowsEl = document.getElementById("ledger-rows");
+  msgEl.textContent = "";
+  msgEl.className = "text-sm";
+  if (!txId) {
+    msgEl.textContent = "Enter a transaction ID.";
+    msgEl.classList.add("text-red-400");
+    return;
+  }
+  const res = await fetch("/compliance-ledger/transaction/" + txId, { headers: authHeaders() });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    msgEl.textContent = err.detail || ("Error " + res.status);
+    msgEl.classList.add("text-red-400");
+    resultsSection.classList.add("hidden");
+    return;
+  }
+  const entries = await res.json();
+  if (entries.length === 0) {
+    msgEl.textContent = "No compliance decisions recorded for this transaction yet.";
+    msgEl.classList.add("text-slate-400");
+    resultsSection.classList.add("hidden");
+    return;
+  }
+  rowsEl.innerHTML = entries.map(function(e) {
+    return "<div class=\"grid grid-cols-7 gap-4 px-6 py-4 border-b border-slate-800 text-sm\">" +
+      "<div class=\"font-mono\">" + e.id + "</div>" +
+      "<div>" + badge(e.decision_status, statusColor(e.decision_status)) + "</div>" +
+      "<div class=\"text-xs text-slate-400\">" + e.applicable_rule_codes.join(", ") + "</div>" +
+      "<div class=\"text-xs text-slate-400\">" + e.triggered_by + "</div>" +
+      "<div class=\"text-xs text-slate-400\">" + new Date(e.decided_at).toLocaleString() + "</div>" +
+      "<div class=\"text-xs text-slate-400\">" + (e.explanation || "\u2014") + "</div>" +
+      "<div>" + (e.hash_valid ? badge("Valid", "text-green-400") : badge("TAMPERED", "text-red-400")) + "</div>" +
+    "</div>";
+  }).join("");
+  resultsSection.classList.remove("hidden");
+});
+
+document.getElementById("verify-chain-btn").addEventListener("click", async () => {
+  const resultEl = document.getElementById("verify-result");
+  resultEl.textContent = "Verifying...";
+  resultEl.className = "text-sm text-slate-400";
+  const res = await fetch("/compliance-ledger/verify", { headers: authHeaders() });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    resultEl.textContent = err.detail || ("Error " + res.status);
+    resultEl.className = "text-sm text-red-400";
+    return;
+  }
+  const data = await res.json();
+  if (data.valid) {
+    resultEl.innerHTML = "<span class=\"text-green-400\">Chain valid.</span> " + data.total_entries + " total entries, no tampering detected.";
+  } else {
+    resultEl.innerHTML = "<span class=\"text-red-400\">Chain INVALID.</span> " + data.total_entries + " total entries. First invalid entry: #" + data.first_invalid_entry_id;
+  }
+  resultEl.className = "text-sm";
+});
+
+loadMe();
+</script>
+
+</body>
+</html>

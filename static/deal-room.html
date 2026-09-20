@@ -8,13 +8,22 @@
 </head>
 <body class="bg-[#0a0e17] min-h-screen text-slate-200 font-sans">
 
-  <header class="border-b border-slate-800 px-6 py-4 flex items-center justify-between">
+  <header class="border-b border-slate-800 px-6 py-4 space-y-3">
+    <div class="flex items-center justify-between">
     <div class="flex items-center gap-3">
       <div class="text-lg font-semibold tracking-widest uppercase text-white">KEVO</div>
       <div class="h-4 w-px bg-slate-700"></div>
       <div class="text-xs text-slate-500 uppercase tracking-wide">Deal Room</div>
     </div>
-    <nav class="flex items-center gap-6">
+    <div class="flex items-center gap-4">
+      <span id="user-name" class="text-sm text-slate-400"></span>
+      <button id="logout-btn"
+        class="text-xs uppercase tracking-wide text-slate-500 hover:text-white border border-slate-700 hover:border-slate-500 px-3 py-1.5 transition-colors">
+        Log Out
+      </button>
+    </div>
+    </div>
+    <nav class="flex items-center gap-x-6 gap-y-2 flex-wrap">
       <a href="/app/dashboard.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Dashboard</a>
       <a href="/app/listings.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">My Listings</a>
       <a href="/app/browse.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Browse</a>
@@ -24,14 +33,9 @@
       <a href="/app/rofr.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">ROFR</a>
       <a href="/app/settlement.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Settlement</a>
       <a href="/app/lending.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Lending</a>
+      <a href="/app/funding.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Funding</a>
+      <a href="/app/ledger.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Ledger</a>
     </nav>
-    <div class="flex items-center gap-4">
-      <span id="user-name" class="text-sm text-slate-400"></span>
-      <button id="logout-btn"
-        class="text-xs uppercase tracking-wide text-slate-500 hover:text-white border border-slate-700 hover:border-slate-500 px-3 py-1.5 transition-colors">
-        Log Out
-      </button>
-    </div>
   </header>
 
   <main class="max-w-5xl mx-auto px-6 py-10 space-y-8">
