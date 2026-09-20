@@ -4,6 +4,7 @@ import statistics
 from collections import defaultdict
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordBearer
+from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -23,6 +24,11 @@ from models import User as UserModel
 from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger
 from models import Transaction
 app = FastAPI(title="KEVO API")
+
+# M28 (first slice) - serves the web app's login + dashboard shell as static
+# files, same-origin, so no CORS setup is needed. html=True lets
+# /app/ resolve to static/index.html automatically.
+app.mount("/app", StaticFiles(directory="static", html=True), name="frontend")
 
 # M27 (first slice) - Hash-Chained Compliance Decision Ledger helpers.
 # GENESIS_HASH is the fixed starting point of the one global chain -
@@ -1000,6 +1006,21 @@ def get_users(
         }
         for user in users
     ]
+
+
+@app.get("/me")
+def get_my_profile(
+    current_user: UserModel = Depends(get_current_user)
+):
+    return {
+        "id": current_user.id,
+        "name": current_user.name,
+        "email": current_user.email,
+        "role": current_user.role,
+        "kyc_status": current_user.kyc_status,
+        "jurisdiction": current_user.jurisdiction,
+        "account_type": current_user.account_type
+    }
 
 
 @app.put("/users/{user_id}/kyc-status")
