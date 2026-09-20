@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KEVO — Market Intel</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#0a0e17] min-h-screen text-slate-200 font-sans">
+
+  <header class="border-b border-slate-800 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="text-lg font-semibold tracking-widest uppercase text-white">KEVO</div>
+      <div class="h-4 w-px bg-slate-700"></div>
+      <div class="text-xs text-slate-500 uppercase tracking-wide">Market Intel</div>
+    </div>
+    <nav class="flex items-center gap-6">
+      <a href="/app/dashboard.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Dashboard</a>
+      <a href="/app/listings.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">My Listings</a>
+      <a href="/app/browse.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Browse</a>
+      <a href="/app/market.html" class="text-xs uppercase tracking-wide text-white">Market Intel</a>
+    </nav>
+    <div class="flex items-center gap-4">
+      <span id="user-name" class="text-sm text-slate-400"></span>
+      <button id="logout-btn"
+        class="text-xs uppercase tracking-wide text-slate-500 hover:text-white border border-slate-700 hover:border-slate-500 px-3 py-1.5 transition-colors">
+        Log Out
+      </button>
+    </div>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-6 py-10 space-y-8">
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Look Up Market Intelligence</div>
+      <div class="border border-slate-800 bg-[#0d1220] p-6">
+        <form id="lookup-form" class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+          <div>
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-2">Company</label>
+            <input id="lookup-company" type="text" required class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-white focus:outline-none focus:border-blue-600" placeholder="e.g. KEVO Startup">
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-2">Asset Type</label>
+            <input id="lookup-asset-type" type="text" required class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-white focus:outline-none focus:border-blue-600" placeholder="e.g. common_stock">
+          </div>
+          <button type="submit" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 text-sm uppercase tracking-wide">View</button>
+        </form>
+      </div>
+    </section>
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Liquidity Aggregation</div>
+      <div id="agg-box" class="hidden border border-slate-800 bg-[#0d1220] p-6 text-sm"></div>
+    </section>
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Demand Curve</div>
+      <div id="curve-box" class="hidden border border-slate-800 bg-[#0d1220]"></div>
+    </section>
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Demand Heatmap</div>
+      <div id="heatmap-box" class="hidden border border-slate-800 bg-[#0d1220]"></div>
+    </section>
+
+  </main>
+
+  <script>
+    const token = localStorage.getItem("kevo_token");
+
+    if (!token) {
+      window.location.href = "/app/";
+    }
+
+    async function loadMe() {
+      const response = await fetch("/me", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+
+      const user = await response.json();
+      document.getElementById("user-name").textContent = user.name;
+    }
+
+    document.getElementById("logout-btn").addEventListener("click", function () {
+      localStorage.removeItem("kevo_token");
+      window.location.href = "/app/";
+    });
+
+    document.getElementById("lookup-form").addEventListener("submit", async function (event) {
+      event.preventDefault();
+      const company = document.getElementById("lookup-company").value.trim();
+      const assetType = document.getElementById("lookup-asset-type").value.trim();
+      if (!company || !assetType) { return; }
+
+      await Promise.all([
+        loadAggregation(company, assetType),
+        loadCurve(company, assetType),
+        loadHeatmap(company, assetType)
+      ]);
+    });
+
+    async function loadAggregation(company, assetType) {
+      const box = document.getElementById("agg-box");
+      box.classList.remove("hidden");
+      box.innerHTML = '<div class="text-slate-500">Loading...</div>';
+
+      const response = await fetch("/liquidity-aggregation?company=" + encodeURIComponent(company) + "&asset_type=" + encodeURIComponent(assetType), {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const data = await response.json();
+
+      if (data.status === "insufficient_data") {
+        box.innerHTML = '<div class="text-slate-500">' + data.message + '</div>';
+        return;
+      }
+
+      const statusColor = data.aggregate_status === "supply_may_cover_demand" ? "text-green-400" : "text-amber-400";
+
+      box.innerHTML =
+        '<div class="grid grid-cols-2 md:grid-cols-4 gap-6 mb-4">' +
+          '<div><div class="text-xs uppercase tracking-wide text-slate-500 mb-1">Active Buyers</div><div class="font-mono text-white text-lg">' + data.active_buyer_count + '</div></div>' +
+          '<div><div class="text-xs uppercase tracking-wide text-slate-500 mb-1">Desired Qty</div><div class="font-mono text-white text-lg">' + data.total_desired_quantity + '</div></div>' +
+          '<div><div class="text-xs uppercase tracking-wide text-slate-500 mb-1">Active Sellers</div><div class="font-mono text-white text-lg">' + data.active_seller_count + '</div></div>' +
+          '<div><div class="text-xs uppercase tracking-wide text-slate-500 mb-1">Available Qty</div><div class="font-mono text-white text-lg">' + data.total_available_quantity + '</div></div>' +
+        '</div>' +
+        '<div class="text-xs uppercase tracking-wide ' + statusColor + ' mb-2">' + data.aggregate_status.replace(/_/g, " ") + '</div>' +
+        '<div class="text-slate-400">' + data.reason + '</div>';
+    }
+
+    async function loadCurve(company, assetType) {
+      const box = document.getElementById("curve-box");
+      box.classList.remove("hidden");
+      box.innerHTML = '<div class="p-6 text-slate-500">Loading...</div>';
+
+      const response = await fetch("/demand-curve?company=" + encodeURIComponent(company) + "&asset_type=" + encodeURIComponent(assetType), {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const data = await response.json();
+
+      if (data.status === "insufficient_data") {
+        box.innerHTML = '<div class="p-6 text-slate-500">' + data.message + '</div>';
+        return;
+      }
+
+      if (data.points.length === 0) {
+        box.innerHTML = '<div class="p-6 text-slate-500">No demand curve points available.</div>';
+        return;
+      }
+
+      let rows = '<div class="grid grid-cols-3 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">' +
+        '<div>Price At Or Above</div><div>Distinct Buyers</div><div>Cumulative Qty</div></div>';
+
+      data.points.forEach(function (point) {
+        rows += '<div class="grid grid-cols-3 gap-4 px-6 py-3 border-b border-slate-800 text-sm last:border-b-0">' +
+          '<div class="font-mono text-white">$' + point.price_at_or_above.toLocaleString() + '</div>' +
+          '<div class="font-mono text-slate-300">' + point.distinct_buyers_in_step + '</div>' +
+          '<div class="font-mono text-slate-300">' + point.cumulative_quantity + '</div></div>';
+      });
+
+      box.innerHTML = rows;
+    }
+
+    async function loadHeatmap(company, assetType) {
+      const box = document.getElementById("heatmap-box");
+      box.classList.remove("hidden");
+      box.innerHTML = '<div class="p-6 text-slate-500">Loading...</div>';
+
+      const response = await fetch("/demand-heatmap?company=" + encodeURIComponent(company) + "&asset_type=" + encodeURIComponent(assetType), {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const data = await response.json();
+
+      if (data.status === "insufficient_data") {
+        box.innerHTML = '<div class="p-6 text-slate-500">' + data.message + '</div>';
+        return;
+      }
+
+      if (data.cells.length === 0) {
+        box.innerHTML = '<div class="p-6 text-slate-500">No heatmap cells available.</div>';
+        return;
+      }
+
+      let heatRows = '<div class="grid grid-cols-4 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">' +
+        '<div>Price Band</div><div>Jurisdiction</div><div>Buyer Count</div><div>Desired Qty</div></div>';
+
+      data.cells.forEach(function (cell) {
+        heatRows += '<div class="grid grid-cols-4 gap-4 px-6 py-3 border-b border-slate-800 text-sm last:border-b-0">' +
+          '<div class="font-mono text-white">$' + cell.price_band_low.toLocaleString() + ' - $' + cell.price_band_high.toLocaleString() + '</div>' +
+          '<div class="font-mono text-slate-300">' + (cell.jurisdiction || "multiple") + '</div>' +
+          '<div class="font-mono text-slate-300">' + cell.buyer_count + '</div>' +
+          '<div class="font-mono text-slate-300">' + cell.total_desired_quantity + '</div></div>';
+      });
+
+      box.innerHTML = heatRows;
+    }
+
+    loadMe();
+  </script>
+
+</body>
+</html>

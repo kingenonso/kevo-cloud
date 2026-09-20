@@ -2133,6 +2133,51 @@ def create_kyc_fact(
     }
 
 
+@app.get("/kyc-facts/user/{user_id}")
+def get_kyc_facts_for_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.id != user_id and current_user.account_type != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="You can only view your own KYC facts"
+        )
+
+    user = db.query(UserModel).filter(
+        UserModel.id == user_id
+    ).first()
+
+    if user is None:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found"
+        )
+
+    facts = db.query(KYCFact).filter(
+        KYCFact.user_id == user_id
+    ).all()
+
+    return {
+        "user_id": user_id,
+        "kyc_status": user.kyc_status,
+        "kyc_facts": [
+            {
+                "id": f.id,
+                "jurisdiction": f.jurisdiction,
+                "fact_type": f.fact_type,
+                "fact_value": f.fact_value,
+                "as_of_date": str(f.as_of_date) if f.as_of_date else None,
+                "verification_status": f.verification_status,
+                "source_reference": f.source_reference,
+                "superseded_by_id": f.superseded_by_id
+            }
+            for f in facts
+        ]
+    }
+
+
 @app.put("/kyc-facts/{fact_id}/verify")
 def verify_kyc_fact(
     fact_id: int,
