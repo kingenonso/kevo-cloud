@@ -916,6 +916,38 @@ def get_transferability_assessment(
         "forecast_date": result["forecast_date"]
     }
 
+@app.get("/transferability/listing/{listing_id}/applicable-rules")
+def get_applicable_transferability_rules(
+    listing_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    listing = db.query(ListingModel).filter(
+        ListingModel.id == listing_id
+    ).first()
+
+    if listing is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Listing not found"
+        )
+
+    rules = find_applicable_transferability_rules(listing, db)
+
+    return {
+        "listing_id": listing.id,
+        "applicable_rules": [
+            {
+                "id": r.id,
+                "rule_code": r.rule_code,
+                "requirement": r.requirement,
+                "decision_if_unmet": r.decision_if_unmet,
+                "source_reference": r.source_reference
+            }
+            for r in rules
+        ]
+    }
+
 @app.get("/transferability/matrix")
 def get_transferability_matrix(
     asset_type: str = "Private Shares",
