@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KEVO — Listing Detail</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#0a0e17] min-h-screen text-slate-200 font-sans">
+
+  <header class="border-b border-slate-800 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="text-lg font-semibold tracking-widest uppercase text-white">KEVO</div>
+      <div class="h-4 w-px bg-slate-700"></div>
+      <div class="text-xs text-slate-500 uppercase tracking-wide">Listing Detail</div>
+    </div>
+    <nav class="flex items-center gap-6">
+      <a href="/app/dashboard.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Dashboard</a>
+      <a href="/app/listings.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">My Listings</a>
+      <a href="/app/browse.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Browse</a>
+    </nav>
+    <div class="flex items-center gap-4">
+      <span id="user-name" class="text-sm text-slate-400"></span>
+      <button id="logout-btn"
+        class="text-xs uppercase tracking-wide text-slate-500 hover:text-white border border-slate-700 hover:border-slate-500 px-3 py-1.5 transition-colors">
+        Log Out
+      </button>
+    </div>
+  </header>
+
+  <main class="max-w-3xl mx-auto px-6 py-10 space-y-10">
+
+    <div id="loading" class="text-sm text-slate-500">Loading listing...</div>
+    <div id="not-found" class="hidden text-sm text-red-400 border border-red-900 bg-red-950/40 px-3 py-2">
+      Listing not found.
+    </div>
+
+    <div id="content" class="hidden space-y-10">
+
+      <section class="border border-slate-800 bg-[#0d1220] p-6">
+        <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Listing</div>
+        <dl class="space-y-3 text-sm">
+          <div class="flex justify-between border-b border-slate-800 pb-2">
+            <dt class="text-slate-500">Company</dt>
+            <dd id="field-company" class="text-white font-mono"></dd>
+          </div>
+          <div class="flex justify-between border-b border-slate-800 pb-2">
+            <dt class="text-slate-500">Asset Type</dt>
+            <dd id="field-asset-type" class="text-white font-mono"></dd>
+          </div>
+          <div class="flex justify-between border-b border-slate-800 pb-2">
+            <dt class="text-slate-500">Quantity</dt>
+            <dd id="field-quantity" class="text-white font-mono"></dd>
+          </div>
+          <div class="flex justify-between">
+            <dt class="text-slate-500">Asking Price</dt>
+            <dd id="field-price" class="text-white font-mono"></dd>
+          </div>
+        </dl>
+      </section>
+
+      <section id="edit-section" class="hidden border border-slate-800 bg-[#0d1220] p-6">
+        <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Edit Listing</div>
+        <form id="edit-form" class="space-y-4">
+
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="edit-company">Company</label>
+              <input id="edit-company" type="text" required
+                class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+            </div>
+            <div>
+              <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="edit-asset_type">Asset Type</label>
+              <input id="edit-asset_type" type="text" required
+                class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="edit-quantity">Quantity</label>
+              <input id="edit-quantity" type="number" min="1" required
+                class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+            </div>
+            <div>
+              <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="edit-asking_price">Asking Price ($)</label>
+              <input id="edit-asking_price" type="number" min="0" step="0.01" required
+                class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="edit-issuer_jurisdiction">Issuer Jurisdiction (optional)</label>
+            <input id="edit-issuer_jurisdiction" type="text"
+              class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+          </div>
+
+          <div class="flex items-center gap-2">
+            <input id="edit-is_transferable" type="checkbox"
+              class="bg-black/30 border border-slate-700">
+            <label class="text-sm text-slate-400" for="edit-is_transferable">Known to be transferable</label>
+          </div>
+
+          <div id="edit-error" class="hidden text-sm text-red-400 border border-red-900 bg-red-950/40 px-3 py-2"></div>
+          <div id="edit-success" class="hidden text-sm text-green-400 border border-green-900 bg-green-950/40 px-3 py-2"></div>
+
+          <div class="flex items-center gap-3">
+            <button type="submit"
+              class="bg-blue-600 hover:bg-blue-500 text-white text-sm uppercase tracking-wide py-2 px-6 transition-colors">
+              Save Changes
+            </button>
+            <button type="button" id="delete-btn"
+              class="text-red-400 hover:text-red-300 text-xs uppercase tracking-wide border border-red-900 hover:border-red-700 px-4 py-2 transition-colors">
+              Delete Listing
+            </button>
+          </div>
+
+        </form>
+      </section>
+
+      <section class="border border-slate-800 bg-[#0d1220] p-6">
+        <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Liquidity Friction</div>
+        <p id="friction-summary" class="text-sm text-slate-300 mb-4"></p>
+
+        <div class="grid grid-cols-2 gap-4 text-sm">
+          <div class="border border-slate-800 p-3">
+            <div class="text-xs uppercase tracking-wide text-slate-500 mb-1">Main Constraint</div>
+            <div id="main-constraint" class="text-white font-mono"></div>
+            <div id="main-constraint-reason" class="text-xs text-slate-500 mt-1"></div>
+          </div>
+          <div class="border border-slate-800 p-3">
+            <div class="text-xs uppercase tracking-wide text-slate-500 mb-1">Transferability</div>
+            <div id="transferability-status" class="text-white font-mono"></div>
+            <div id="transferability-explanation" class="text-xs text-slate-500 mt-1"></div>
+          </div>
+        </div>
+
+        <div class="border border-slate-800 p-3 mt-4 text-sm">
+          <div class="text-xs uppercase tracking-wide text-slate-500 mb-1">ROFR Status</div>
+          <div id="rofr-status" class="text-white font-mono"></div>
+          <div id="rofr-reasons" class="text-xs text-slate-500 mt-1"></div>
+        </div>
+
+        <div class="grid grid-cols-4 gap-3 mt-6 text-center text-sm">
+          <div class="border border-slate-800 p-3">
+            <div id="count-complete" class="text-xl text-green-400 font-mono"></div>
+            <div class="text-xs text-slate-500 uppercase tracking-wide mt-1">Complete</div>
+          </div>
+          <div class="border border-slate-800 p-3">
+            <div id="count-unverified" class="text-xl text-amber-400 font-mono"></div>
+            <div class="text-xs text-slate-500 uppercase tracking-wide mt-1">Unverified</div>
+          </div>
+          <div class="border border-slate-800 p-3">
+            <div id="count-incomplete" class="text-xl text-red-400 font-mono"></div>
+            <div class="text-xs text-slate-500 uppercase tracking-wide mt-1">Incomplete</div>
+          </div>
+          <div class="border border-slate-800 p-3">
+            <div id="count-unknown" class="text-xl text-slate-400 font-mono"></div>
+            <div class="text-xs text-slate-500 uppercase tracking-wide mt-1">Unknown</div>
+          </div>
+        </div>
+
+        <p id="friction-disclaimer" class="text-xs text-slate-600 mt-6"></p>
+      </section>
+
+      <section>
+        <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Liquidity Roadmap</div>
+        <div class="border border-slate-800 bg-[#0d1220]">
+          <div class="grid grid-cols-4 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
+            <div>Step</div>
+            <div>Required</div>
+            <div>Status</div>
+            <div>Reason</div>
+          </div>
+          <div id="steps-rows"></div>
+        </div>
+      </section>
+
+    </div>
+
+  </main>
+
+  <script>
+    const token = localStorage.getItem("kevo_token");
+
+    if (!token) {
+      window.location.href = "/app/";
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const listingId = params.get("id");
+
+    if (!listingId) {
+      document.getElementById("loading").classList.add("hidden");
+      document.getElementById("not-found").classList.remove("hidden");
+    }
+
+    let myId = null;
+    let currentListingFields = null;
+
+    async function loadMe() {
+      const response = await fetch("/me", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+
+      const user = await response.json();
+      myId = user.id;
+      document.getElementById("user-name").textContent = user.name;
+    }
+
+    async function loadListing() {
+      const response = await fetch("/listings/" + listingId, {
+        headers: { "Authorization": "Bearer " + token }
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return false;
+      }
+
+      if (response.status === 404) {
+        document.getElementById("loading").classList.add("hidden");
+        document.getElementById("not-found").classList.remove("hidden");
+        return false;
+      }
+
+      const data = await response.json();
+      const listing = data.listing;
+
+      document.getElementById("field-company").textContent = listing.company;
+      document.getElementById("field-asset-type").textContent = listing.asset_type;
+      document.getElementById("field-quantity").textContent = listing.quantity;
+      document.getElementById("field-price").textContent = "$" + listing.asking_price.toLocaleString();
+
+      if (data.seller.id === myId) {
+        currentListingFields = listing;
+        document.getElementById("edit-company").value = listing.company;
+        document.getElementById("edit-asset_type").value = listing.asset_type;
+        document.getElementById("edit-quantity").value = listing.quantity;
+        document.getElementById("edit-asking_price").value = listing.asking_price;
+        document.getElementById("edit-issuer_jurisdiction").value = listing.issuer_jurisdiction || "";
+        document.getElementById("edit-is_transferable").checked = !!listing.is_transferable;
+        document.getElementById("edit-section").classList.remove("hidden");
+      }
+
+      return true;
+    }
+
+    const determinabilityColors = {
+      known_complete: "text-green-400 border-green-900 bg-green-950/40",
+      required_but_unverified: "text-amber-400 border-amber-900 bg-amber-950/40",
+      known_incomplete: "text-red-400 border-red-900 bg-red-950/40",
+      cannot_determine: "text-slate-400 border-slate-700 bg-slate-900/40"
+    };
+
+    function renderSteps(steps) {
+      const rowsContainer = document.getElementById("steps-rows");
+      rowsContainer.innerHTML = "";
+
+      steps.forEach(function (step) {
+        const row = document.createElement("div");
+        row.className = "grid grid-cols-4 gap-4 px-6 py-3 border-b border-slate-800 text-sm last:border-b-0 items-center";
+        const colorClass = determinabilityColors[step.determinability] || determinabilityColors.cannot_determine;
+        row.innerHTML =
+          '<div class="text-white">' + step.step_type.replace(/_/g, " ") + '</div>' +
+          '<div class="font-mono text-slate-300">' + (step.required ? "Yes" : "No") + '</div>' +
+          '<div><span class="inline-block text-xs uppercase tracking-wide px-2 py-1 border ' + colorClass + '">' + step.determinability.replace(/_/g, " ") + '</span></div>' +
+          '<div class="text-xs text-slate-500">' + step.reasons + '</div>';
+        rowsContainer.appendChild(row);
+      });
+    }
+
+    async function loadFriction() {
+      const response = await fetch("/liquidity-friction/listing/" + listingId, {
+        headers: { "Authorization": "Bearer " + token }
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+
+      if (response.status === 404) {
+        document.getElementById("loading").classList.add("hidden");
+        document.getElementById("not-found").classList.remove("hidden");
+        return;
+      }
+
+      const data = await response.json();
+
+      document.getElementById("friction-summary").textContent = data.summary;
+      document.getElementById("main-constraint").textContent = data.main_constraint ? data.main_constraint.replace(/_/g, " ") : "None identified";
+      document.getElementById("main-constraint-reason").textContent = data.main_constraint_reason || "";
+      document.getElementById("transferability-status").textContent = data.transferability.status.replace(/_/g, " ");
+      document.getElementById("transferability-explanation").textContent = data.transferability.explanation;
+      document.getElementById("rofr-status").textContent = data.rofr.determinability.replace(/_/g, " ");
+      document.getElementById("rofr-reasons").textContent = data.rofr.reasons;
+
+      document.getElementById("count-complete").textContent = data.steps_breakdown.known_complete;
+      document.getElementById("count-unverified").textContent = data.steps_breakdown.required_but_unverified;
+      document.getElementById("count-incomplete").textContent = data.steps_breakdown.known_incomplete;
+      document.getElementById("count-unknown").textContent = data.steps_breakdown.cannot_determine;
+
+      document.getElementById("friction-disclaimer").textContent = data.disclaimer;
+
+      renderSteps(data.steps);
+
+      document.getElementById("loading").classList.add("hidden");
+      document.getElementById("content").classList.remove("hidden");
+    }
+
+    document.getElementById("edit-form").addEventListener("submit", async function (event) {
+      event.preventDefault();
+
+      const errorBox = document.getElementById("edit-error");
+      const successBox = document.getElementById("edit-success");
+      errorBox.classList.add("hidden");
+      successBox.classList.add("hidden");
+
+      const payload = {
+        seller_id: myId,
+        company: document.getElementById("edit-company").value,
+        asset_type: document.getElementById("edit-asset_type").value,
+        quantity: parseInt(document.getElementById("edit-quantity").value, 10),
+        asking_price: parseFloat(document.getElementById("edit-asking_price").value),
+        issuer_jurisdiction: document.getElementById("edit-issuer_jurisdiction").value || null,
+        is_transferable: document.getElementById("edit-is_transferable").checked,
+        issuer_reporting_status: currentListingFields ? currentListingFields.issuer_reporting_status : null,
+        issuer_current_information_available: currentListingFields ? currentListingFields.issuer_current_information_available : null
+      };
+
+      try {
+        const response = await fetch("/listings/" + listingId, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + token
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (response.ok) {
+          successBox.textContent = "Listing updated.";
+          successBox.classList.remove("hidden");
+          await loadListing();
+          await loadFriction();
+          return;
+        }
+
+        const data = await response.json();
+        errorBox.textContent = data.detail || "Could not update listing.";
+        errorBox.classList.remove("hidden");
+      } catch (err) {
+        errorBox.textContent = "Could not reach the server.";
+        errorBox.classList.remove("hidden");
+      }
+    });
+
+    document.getElementById("delete-btn").addEventListener("click", async function () {
+      if (!confirm("Delete this listing? This cannot be undone.")) {
+        return;
+      }
+
+      try {
+        const response = await fetch("/listings/" + listingId, {
+          method: "DELETE",
+          headers: { "Authorization": "Bearer " + token }
+        });
+
+        if (response.ok) {
+          window.location.href = "/app/listings.html";
+          return;
+        }
+
+        const data = await response.json();
+        document.getElementById("edit-error").textContent = data.detail || "Could not delete listing.";
+        document.getElementById("edit-error").classList.remove("hidden");
+      } catch (err) {
+        document.getElementById("edit-error").textContent = "Could not reach the server.";
+        document.getElementById("edit-error").classList.remove("hidden");
+      }
+    });
+
+    document.getElementById("logout-btn").addEventListener("click", function () {
+      localStorage.removeItem("kevo_token");
+      window.location.href = "/app/";
+    });
+
+    async function init() {
+      if (!listingId) {
+        return;
+      }
+      await loadMe();
+      const found = await loadListing();
+      if (found) {
+        await loadFriction();
+      }
+    }
+
+    init();
+  </script>
+
+</body>
+</html>
