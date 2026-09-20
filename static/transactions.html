@@ -23,6 +23,7 @@
       <a href="/app/transactions.html" class="text-xs uppercase tracking-wide text-white">Transactions</a>
       <a href="/app/rofr.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">ROFR</a>
       <a href="/app/settlement.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Settlement</a>
+      <a href="/app/lending.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Lending</a>
     </nav>
     <div class="flex items-center gap-4">
       <span id="user-name" class="text-sm text-slate-400"></span>
@@ -106,7 +107,7 @@
           "<div class=\"font-mono\">" + t.listing_id + "</div>" +
           "<div>" + youAre + "</div>" +
           "<div class=\"font-mono\">" + t.quantity + "</div>" +
-          "<div class=\"font-mono\">$" + t.agreed_price + "</div>" +
+          "<div class=\"font-mono\">$" + t.agreed_price + " " + t.settlement_currency + "</div>" +
           "<div>" + t.status + "</div>";
         row.addEventListener("click", function () {
           window.location.href = "/app/deal-room.html?id=" + t.id;

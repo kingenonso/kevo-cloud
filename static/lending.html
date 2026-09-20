@@ -52,3 +52,297 @@
         <div id="loan-empty" class="px-6 py-6 text-sm text-slate-500 hidden">No loan requests yet.</div>
       </div>
     </section>
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Request a Loan Against Verified Shares</div>
+      <div class="border border-slate-800 bg-[#0d1220] p-6 space-y-4">
+        <div class="text-xs text-slate-500">Only your own verified ownership records can back a loan request. KEVO never lends money itself — this tracks your request through to a real external lender.</div>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Ownership Record</label>
+            <select id="ownership-record-select" class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+              <option value="">Loading your verified records...</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Requested Amount (USD)</label>
+            <input id="requested-amount" type="number" class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Notes (optional)</label>
+          <input id="loan-notes" type="text" class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+        </div>
+        <button id="submit-loan-btn" class="text-xs uppercase tracking-wide bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 transition-colors">Submit Loan Request</button>
+        <div id="loan-message" class="text-xs"></div>
+      </div>
+    </section>
+
+    <section id="admin-manage-section" class="hidden">
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Admin: Manage a Loan Request</div>
+      <div class="border border-slate-800 bg-[#0d1220] p-6 space-y-6">
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Loan Request ID</label>
+          <input id="manage-loan-id" type="number" class="w-full max-w-xs bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+        </div>
+
+        <div class="border-t border-slate-800 pt-4 space-y-3">
+          <div class="text-xs text-slate-400">Match to a Real External Lender</div>
+          <div class="grid grid-cols-2 gap-4">
+            <input id="lender-name" type="text" placeholder="Lender name (required)" class="bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+            <input id="lender-reference" type="text" placeholder="Lender reference (optional)" class="bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+          </div>
+          <button id="match-loan-btn" class="text-xs uppercase tracking-wide border border-slate-700 hover:border-slate-500 text-slate-300 hover:text-white px-4 py-2 transition-colors">Match to Lender</button>
+        </div>
+
+        <div class="border-t border-slate-800 pt-4 space-y-3">
+          <div class="text-xs text-slate-400">Decline</div>
+          <input id="decline-notes" type="text" placeholder="Notes (optional)" class="w-full max-w-md bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+          <button id="decline-loan-btn" class="text-xs uppercase tracking-wide border border-slate-700 hover:border-slate-500 text-slate-300 hover:text-white px-4 py-2 transition-colors">Decline Request</button>
+        </div>
+
+        <div class="border-t border-slate-800 pt-4 space-y-3">
+          <div class="text-xs text-slate-400">Close (Real Lender Has Taken Over)</div>
+          <button id="close-loan-btn" class="text-xs uppercase tracking-wide bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 transition-colors">Close Request</button>
+        </div>
+
+        <div id="manage-message" class="text-xs"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    const token = localStorage.getItem("kevo_token");
+    if (!token) {
+      window.location.href = "/app/";
+    }
+    let myId = null;
+    let isAdmin = false;
+
+    function statusColor(status) {
+      const map = {
+        closed: "text-green-400 border-green-800 bg-green-950",
+        matched: "text-amber-400 border-amber-800 bg-amber-950",
+        requested: "text-slate-400 border-slate-700 bg-slate-900",
+        withdrawn: "text-slate-400 border-slate-700 bg-slate-900",
+        declined: "text-red-400 border-red-800 bg-red-950"
+      };
+      return map[status] || "text-slate-400 border-slate-700 bg-slate-900";
+    }
+
+    function badge(status) {
+      return `<span class="text-xs px-2 py-0.5 border ${statusColor(status)}">${status}</span>`;
+    }
+
+    async function loadMe() {
+      const response = await fetch("/me", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+      const data = await response.json();
+      document.getElementById("user-name").textContent = data.name;
+      myId = data.id;
+      isAdmin = data.account_type === "admin";
+      if (isAdmin) {
+        document.getElementById("admin-manage-section").classList.remove("hidden");
+      }
+      loadOwnershipRecords();
+      loadLoanRequests();
+    }
+
+    async function loadOwnershipRecords() {
+      const response = await fetch("/ownership-records", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+      const records = await response.json();
+      const verified = records.filter(r => r.verification_status === "verified" && r.seller_id === myId);
+      const selectEl = document.getElementById("ownership-record-select");
+      if (verified.length === 0) {
+        selectEl.innerHTML = '<option value="">No verified ownership records on file</option>';
+        return;
+      }
+      selectEl.innerHTML = verified.map(r =>
+        `<option value="${r.id}">#${r.id} — ${r.company} (${r.quantity} ${r.asset_type})</option>`
+      ).join("");
+    }
+
+    async function loadLoanRequests() {
+      const response = await fetch("/loan-requests", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+      const requests = await response.json();
+      const rowsEl = document.getElementById("loan-rows");
+      const emptyEl = document.getElementById("loan-empty");
+      rowsEl.innerHTML = "";
+      if (requests.length === 0) {
+        emptyEl.classList.remove("hidden");
+        return;
+      }
+      emptyEl.classList.add("hidden");
+      requests.forEach(r => {
+        const row = document.createElement("div");
+        row.className = "grid grid-cols-7 gap-4 px-6 py-3 border-b border-slate-800 text-sm items-center";
+        const canWithdraw = r.holder_id === myId && r.status === "requested";
+        row.innerHTML = `
+          <div>${r.id}</div>
+          <div>#${r.ownership_record_id}</div>
+          <div>$${Number(r.requested_amount).toLocaleString()}</div>
+          <div>${badge(r.status)}</div>
+          <div class="text-slate-400">${r.external_lender_name || ""}</div>
+          <div class="text-slate-400">${r.notes || ""}</div>
+          <div>${canWithdraw ? `<button class="withdraw-btn text-xs uppercase tracking-wide border border-slate-700 hover:border-slate-500 text-slate-300 hover:text-white px-3 py-1 transition-colors" data-id="${r.id}">Withdraw</button>` : ""}</div>
+        `;
+        rowsEl.appendChild(row);
+      });
+      document.querySelectorAll(".withdraw-btn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const id = btn.getAttribute("data-id");
+          await fetch(`/loan-requests/${id}/withdraw`, {
+            method: "PUT",
+            headers: { "Authorization": "Bearer " + token }
+          });
+          loadLoanRequests();
+        });
+      });
+    }
+
+    document.getElementById("submit-loan-btn").addEventListener("click", async () => {
+      const ownershipRecordId = document.getElementById("ownership-record-select").value;
+      const amount = document.getElementById("requested-amount").value;
+      const notes = document.getElementById("loan-notes").value;
+      const messageEl = document.getElementById("loan-message");
+      if (!ownershipRecordId) {
+        messageEl.textContent = "Select a verified ownership record.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      if (!amount) {
+        messageEl.textContent = "Enter a requested amount.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      const params = new URLSearchParams();
+      params.set("ownership_record_id", ownershipRecordId);
+      params.set("requested_amount", amount);
+      if (notes) params.set("notes", notes);
+      const response = await fetch(`/loan-requests?${params.toString()}`, {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        messageEl.textContent = data.detail || "Failed to submit loan request.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      messageEl.textContent = `Loan request ${data.id} submitted.`;
+      messageEl.className = "text-xs text-green-400";
+      loadLoanRequests();
+    });
+
+    document.getElementById("match-loan-btn").addEventListener("click", async () => {
+      const id = document.getElementById("manage-loan-id").value;
+      const lenderName = document.getElementById("lender-name").value;
+      const lenderRef = document.getElementById("lender-reference").value;
+      const messageEl = document.getElementById("manage-message");
+      if (!id) {
+        messageEl.textContent = "Enter a loan request ID.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      if (!lenderName) {
+        messageEl.textContent = "Enter a lender name.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      const params = new URLSearchParams();
+      params.set("external_lender_name", lenderName);
+      if (lenderRef) params.set("external_lender_reference", lenderRef);
+      const response = await fetch(`/loan-requests/${id}/match?${params.toString()}`, {
+        method: "PUT",
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        messageEl.textContent = data.detail || "Failed to match loan request.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      messageEl.textContent = "Loan request matched to lender.";
+      messageEl.className = "text-xs text-green-400";
+      loadLoanRequests();
+    });
+
+    document.getElementById("decline-loan-btn").addEventListener("click", async () => {
+      const id = document.getElementById("manage-loan-id").value;
+      const notes = document.getElementById("decline-notes").value;
+      const messageEl = document.getElementById("manage-message");
+      if (!id) {
+        messageEl.textContent = "Enter a loan request ID.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      const params = new URLSearchParams();
+      if (notes) params.set("notes", notes);
+      const response = await fetch(`/loan-requests/${id}/decline?${params.toString()}`, {
+        method: "PUT",
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        messageEl.textContent = data.detail || "Failed to decline loan request.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      messageEl.textContent = "Loan request declined.";
+      messageEl.className = "text-xs text-green-400";
+      loadLoanRequests();
+    });
+
+    document.getElementById("close-loan-btn").addEventListener("click", async () => {
+      const id = document.getElementById("manage-loan-id").value;
+      const messageEl = document.getElementById("manage-message");
+      if (!id) {
+        messageEl.textContent = "Enter a loan request ID.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      const response = await fetch(`/loan-requests/${id}/close`, {
+        method: "PUT",
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        messageEl.textContent = data.detail || "Failed to close loan request.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      messageEl.textContent = "Loan request closed.";
+      messageEl.className = "text-xs text-green-400";
+      loadLoanRequests();
+    });
+
+    document.getElementById("logout-btn").addEventListener("click", () => {
+      localStorage.removeItem("kevo_token");
+      window.location.href = "/app/";
+    });
+
+    loadMe();
+  </script>
+</body>
+</html>
