@@ -17,6 +17,7 @@
     <nav class="flex items-center gap-6">
       <a href="/app/dashboard.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Dashboard</a>
       <a href="/app/listings.html" class="text-xs uppercase tracking-wide text-white">My Listings</a>
+      <a href="/app/browse.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Browse</a>
     </nav>
     <div class="flex items-center gap-4">
       <span id="user-name" class="text-sm text-slate-400"></span>
@@ -36,11 +37,12 @@
         You have no listings yet. Create your first one below.
       </div>
       <div id="listings-table" class="hidden border border-slate-800 bg-[#0d1220]">
-        <div class="grid grid-cols-4 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
+        <div class="grid grid-cols-5 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
           <div>Company</div>
           <div>Asset Type</div>
           <div>Quantity</div>
           <div>Asking Price</div>
+          <div>Actions</div>
         </div>
         <div id="listings-rows"></div>
       </div>
@@ -157,12 +159,13 @@
 
       mine.forEach(function (listing) {
         const row = document.createElement("div");
-        row.className = "grid grid-cols-4 gap-4 px-6 py-3 border-b border-slate-800 text-sm last:border-b-0";
+        row.className = "grid grid-cols-5 gap-4 px-6 py-3 border-b border-slate-800 text-sm last:border-b-0 items-center";
         row.innerHTML =
           '<div class="text-white">' + listing.company + '</div>' +
           '<div class="font-mono text-slate-300">' + listing.asset_type + '</div>' +
           '<div class="font-mono text-slate-300">' + listing.quantity + '</div>' +
-          '<div class="font-mono text-slate-300">$' + listing.asking_price.toLocaleString() + '</div>';
+          '<div class="font-mono text-slate-300">$' + listing.asking_price.toLocaleString() + '</div>' +
+          '<div><a href="/app/listing-detail.html?id=' + listing.id + '" class="text-xs uppercase tracking-wide text-blue-400 hover:text-blue-300">View</a></div>';
         rowsContainer.appendChild(row);
       });
 

@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KEVO — Browse</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#0a0e17] min-h-screen text-slate-200 font-sans">
+
+  <header class="border-b border-slate-800 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="text-lg font-semibold tracking-widest uppercase text-white">KEVO</div>
+      <div class="h-4 w-px bg-slate-700"></div>
+      <div class="text-xs text-slate-500 uppercase tracking-wide">Browse</div>
+    </div>
+    <nav class="flex items-center gap-6">
+      <a href="/app/dashboard.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Dashboard</a>
+      <a href="/app/listings.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">My Listings</a>
+      <a href="/app/browse.html" class="text-xs uppercase tracking-wide text-white">Browse</a>
+    </nav>
+    <div class="flex items-center gap-4">
+      <span id="user-name" class="text-sm text-slate-400"></span>
+      <button id="logout-btn"
+        class="text-xs uppercase tracking-wide text-slate-500 hover:text-white border border-slate-700 hover:border-slate-500 px-3 py-1.5 transition-colors">
+        Log Out
+      </button>
+    </div>
+  </header>
+
+  <main class="max-w-3xl mx-auto px-6 py-10 space-y-10">
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Marketplace Listings</div>
+      <div id="market-loading" class="text-sm text-slate-500">Loading listings...</div>
+      <div id="market-empty" class="hidden text-sm text-slate-500 border border-slate-800 bg-[#0d1220] p-6">
+        No listings are available right now.
+      </div>
+      <div id="market-table" class="hidden border border-slate-800 bg-[#0d1220]">
+        <div class="grid grid-cols-4 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
+          <div>Company</div>
+          <div>Asset Type</div>
+          <div>Quantity</div>
+          <div>Asking Price</div>
+        </div>
+        <div id="market-rows"></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Express Interest</div>
+      <div class="border border-slate-800 bg-[#0d1220] p-6">
+        <form id="interest-form" class="space-y-4">
+
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="company">Company</label>
+              <input id="company" name="company" type="text" required
+                class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+            </div>
+            <div>
+              <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="asset_type">Asset Type</label>
+              <input id="asset_type" name="asset_type" type="text" required placeholder="e.g. common_stock"
+                class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="desired_quantity">Desired Quantity</label>
+              <input id="desired_quantity" name="desired_quantity" type="number" min="1" required
+                class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+            </div>
+            <div>
+              <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="maximum_price">Maximum Price ($)</label>
+              <input id="maximum_price" name="maximum_price" type="number" min="0" step="0.01" required
+                class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+            </div>
+          </div>
+
+          <div id="form-error" class="hidden text-sm text-red-400 border border-red-900 bg-red-950/40 px-3 py-2"></div>
+          <div id="form-success" class="hidden text-sm text-green-400 border border-green-900 bg-green-950/40 px-3 py-2"></div>
+
+          <button type="submit" id="submit-btn"
+            class="bg-blue-600 hover:bg-blue-500 text-white text-sm uppercase tracking-wide py-2 px-6 transition-colors">
+            Express Interest
+          </button>
+
+        </form>
+      </div>
+    </section>
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Your Interests</div>
+      <div id="interests-loading" class="text-sm text-slate-500">Loading your interests...</div>
+      <div id="interests-empty" class="hidden text-sm text-slate-500 border border-slate-800 bg-[#0d1220] p-6">
+        You haven't expressed interest in anything yet.
+      </div>
+      <div id="interests-table" class="hidden border border-slate-800 bg-[#0d1220]">
+        <div class="grid grid-cols-6 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
+          <div>Company</div>
+          <div>Asset Type</div>
+          <div>Quantity</div>
+          <div>Max Price</div>
+          <div>Status</div>
+          <div>Action</div>
+        </div>
+        <div id="interests-rows"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    const token = localStorage.getItem("kevo_token");
+
+    if (!token) {
+      window.location.href = "/app/";
+    }
+
+    let myId = null;
+
+    async function loadMe() {
+      const response = await fetch("/me", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+
+      const user = await response.json();
+      myId = user.id;
+      document.getElementById("user-name").textContent = user.name;
+    }
+
+    function renderMarket(listings) {
+      document.getElementById("market-loading").classList.add("hidden");
+
+      if (listings.length === 0) {
+        document.getElementById("market-empty").classList.remove("hidden");
+        return;
+      }
+
+      const rowsContainer = document.getElementById("market-rows");
+      rowsContainer.innerHTML = "";
+
+      listings.forEach(function (listing) {
+        const row = document.createElement("div");
+        row.className = "grid grid-cols-4 gap-4 px-6 py-3 border-b border-slate-800 text-sm last:border-b-0";
+        row.innerHTML =
+          '<div class="text-white">' + listing.company + '</div>' +
+          '<div class="font-mono text-slate-300">' + listing.asset_type + '</div>' +
+          '<div class="font-mono text-slate-300">' + listing.quantity + '</div>' +
+          '<div class="font-mono text-slate-300">$' + listing.asking_price.toLocaleString() + '</div>';
+        rowsContainer.appendChild(row);
+      });
+
+      document.getElementById("market-table").classList.remove("hidden");
+    }
+
+    async function loadMarket() {
+      const response = await fetch("/listings", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+
+      const listings = await response.json();
+      renderMarket(listings);
+    }
+
+    const statusColors = {
+      active: "text-green-400 border-green-900 bg-green-950/40",
+      withdrawn: "text-slate-400 border-slate-700 bg-slate-900/40",
+      fulfilled: "text-blue-400 border-blue-900 bg-blue-950/40"
+    };
+
+    function renderInterests(interests) {
+      document.getElementById("interests-loading").classList.add("hidden");
+
+      if (interests.length === 0) {
+        document.getElementById("interests-empty").classList.remove("hidden");
+        return;
+      }
+
+      const rowsContainer = document.getElementById("interests-rows");
+      rowsContainer.innerHTML = "";
+
+      interests.forEach(function (interest) {
+        const row = document.createElement("div");
+        row.className = "grid grid-cols-6 gap-4 px-6 py-3 border-b border-slate-800 text-sm last:border-b-0 items-center";
+        const colorClass = statusColors[interest.status] || statusColors.active;
+        const actionCell = interest.status === "active"
+          ? '<button data-withdraw-id="' + interest.id + '" class="text-xs uppercase tracking-wide text-red-400 hover:text-red-300 border border-red-900 px-2 py-1">Withdraw</button>'
+          : '<span class="text-xs text-slate-600">&mdash;</span>';
+        row.innerHTML =
+          '<div class="text-white">' + interest.company + '</div>' +
+          '<div class="font-mono text-slate-300">' + interest.asset_type + '</div>' +
+          '<div class="font-mono text-slate-300">' + interest.desired_quantity + '</div>' +
+          '<div class="font-mono text-slate-300">$' + interest.maximum_price.toLocaleString() + '</div>' +
+          '<div><span class="inline-block text-xs uppercase tracking-wide px-2 py-1 border ' + colorClass + '">' + interest.status + '</span></div>' +
+          '<div>' + actionCell + '</div>';
+        rowsContainer.appendChild(row);
+      });
+
+      document.getElementById("interests-table").classList.remove("hidden");
+    }
+
+    async function loadInterests() {
+      const response = await fetch("/buyer-interests", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+
+      const interests = await response.json();
+      renderInterests(interests);
+    }
+
+    document.getElementById("interests-rows").addEventListener("click", async function (event) {
+      const btn = event.target.closest("[data-withdraw-id]");
+      if (!btn) { return; }
+
+      if (!confirm("Withdraw this interest? This cannot be undone.")) { return; }
+
+      const interestId = btn.getAttribute("data-withdraw-id");
+      const response = await fetch("/buyer-interests/" + interestId + "/withdraw", {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + token }
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+
+      if (response.ok) {
+        loadInterests();
+      }
+    });
+
+    document.getElementById("interest-form").addEventListener("submit", async function (event) {
+      event.preventDefault();
+
+      const errorBox = document.getElementById("form-error");
+      const successBox = document.getElementById("form-success");
+      errorBox.classList.add("hidden");
+      successBox.classList.add("hidden");
+
+      const payload = {
+        buyer_id: myId,
+        company: document.getElementById("company").value,
+        asset_type: document.getElementById("asset_type").value,
+        desired_quantity: parseInt(document.getElementById("desired_quantity").value, 10),
+        maximum_price: parseFloat(document.getElementById("maximum_price").value)
+      };
+
+      try {
+        const response = await fetch("/buyer-interests", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + token
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (response.ok) {
+          successBox.textContent = "Interest submitted.";
+          successBox.classList.remove("hidden");
+          document.getElementById("interest-form").reset();
+          await loadInterests();
+          return;
+        }
+
+        const data = await response.json();
+        errorBox.textContent = data.detail || "Could not submit interest.";
+        errorBox.classList.remove("hidden");
+      } catch (err) {
+        errorBox.textContent = "Could not reach the server.";
+        errorBox.classList.remove("hidden");
+      }
+    });
+
+    document.getElementById("logout-btn").addEventListener("click", function () {
+      localStorage.removeItem("kevo_token");
+      window.location.href = "/app/";
+    });
+
+    async function init() {
+      await loadMe();
+      await loadMarket();
+      await loadInterests();
+    }
+
+    init();
+  </script>
+
+</body>
+</html>

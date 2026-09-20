@@ -1375,7 +1375,11 @@ def get_listings(db: Session = Depends(get_db), current_user: UserModel = Depend
             "company": listing.company,
             "asset_type": listing.asset_type,
             "quantity": listing.quantity,
-            "asking_price": float(listing.asking_price)
+            "asking_price": float(listing.asking_price),
+            "issuer_reporting_status": listing.issuer_reporting_status,
+            "issuer_current_information_available": listing.issuer_current_information_available,
+            "issuer_jurisdiction": listing.issuer_jurisdiction,
+            "is_transferable": listing.is_transferable
         }
         for listing in listings
     ]
@@ -1407,7 +1411,11 @@ def get_listing(
             "company": listing.company,
             "asset_type": listing.asset_type,
             "quantity": listing.quantity,
-            "asking_price": float(listing.asking_price)
+            "asking_price": float(listing.asking_price),
+            "issuer_reporting_status": listing.issuer_reporting_status,
+            "issuer_current_information_available": listing.issuer_current_information_available,
+            "issuer_jurisdiction": listing.issuer_jurisdiction,
+            "is_transferable": listing.is_transferable
         },
         "seller": {
             "id": seller.id,
@@ -1689,6 +1697,46 @@ def get_buyer_interest(
             "status": interest.status
         }
     }    
+@app.post("/buyer-interests/{interest_id}/withdraw")
+def withdraw_buyer_interest(
+    interest_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    interest = db.query(BuyerInterest).filter(
+        BuyerInterest.id == interest_id
+    ).first()
+
+    if interest is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Buyer interest not found"
+        )
+
+    if current_user.id != interest.buyer_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only withdraw your own buyer interests"
+        )
+
+    interest.status = "withdrawn"
+    db.commit()
+    db.refresh(interest)
+
+    return {
+        "message": "Buyer interest withdrawn",
+        "buyer_interest": {
+            "id": interest.id,
+            "buyer_id": interest.buyer_id,
+            "company": interest.company,
+            "asset_type": interest.asset_type,
+            "desired_quantity": interest.desired_quantity,
+            "maximum_price": float(interest.maximum_price),
+            "status": interest.status
+        }
+    }
+
+
 @app.post("/investor-eligibility")
 def create_investor_eligibility(
     eligibility: InvestorEligibilityCreate,
