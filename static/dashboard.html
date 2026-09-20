@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KEVO — Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#0a0e17] min-h-screen text-slate-200 font-sans">
+
+  <header class="border-b border-slate-800 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="text-lg font-semibold tracking-widest uppercase text-white">KEVO</div>
+      <div class="h-4 w-px bg-slate-700"></div>
+      <div class="text-xs text-slate-500 uppercase tracking-wide">Dashboard</div>
+    </div>
+    <div class="flex items-center gap-4">
+      <span id="user-name" class="text-sm text-slate-400"></span>
+      <button id="logout-btn"
+        class="text-xs uppercase tracking-wide text-slate-500 hover:text-white border border-slate-700 hover:border-slate-500 px-3 py-1.5 transition-colors">
+        Log Out
+      </button>
+    </div>
+  </header>
+
+  <main class="max-w-2xl mx-auto px-6 py-10">
+
+    <div id="loading" class="text-sm text-slate-500">Loading profile...</div>
+
+    <div id="profile-card" class="hidden border border-slate-800 bg-[#0d1220] p-6">
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Profile</div>
+
+      <dl class="space-y-3 text-sm">
+        <div class="flex justify-between border-b border-slate-800 pb-2">
+          <dt class="text-slate-500">Name</dt>
+          <dd id="field-name" class="text-white font-mono"></dd>
+        </div>
+        <div class="flex justify-between border-b border-slate-800 pb-2">
+          <dt class="text-slate-500">Email</dt>
+          <dd id="field-email" class="text-white font-mono"></dd>
+        </div>
+        <div class="flex justify-between border-b border-slate-800 pb-2">
+          <dt class="text-slate-500">Role</dt>
+          <dd id="field-role" class="text-white font-mono"></dd>
+        </div>
+        <div class="flex justify-between border-b border-slate-800 pb-2">
+          <dt class="text-slate-500">Account Type</dt>
+          <dd id="field-account-type" class="text-white font-mono"></dd>
+        </div>
+        <div class="flex justify-between border-b border-slate-800 pb-2">
+          <dt class="text-slate-500">Jurisdiction</dt>
+          <dd id="field-jurisdiction" class="text-white font-mono"></dd>
+        </div>
+        <div class="flex justify-between">
+          <dt class="text-slate-500">KYC Status</dt>
+          <dd id="field-kyc-status"></dd>
+        </div>
+      </dl>
+    </div>
+
+    <div class="mt-6 text-xs text-slate-600">
+      This is the first slice of KEVO's web app — your real account data, pulled live from the API.
+      More of the platform surfaces here as the web app grows.
+    </div>
+
+  </main>
+
+  <script>
+    const token = localStorage.getItem("kevo_token");
+
+    if (!token) {
+      window.location.href = "/app/";
+    }
+
+    const kycColors = {
+      verified: "text-green-400 border-green-900 bg-green-950/40",
+      not_started: "text-slate-400 border-slate-700 bg-slate-900/40",
+      pending: "text-amber-400 border-amber-900 bg-amber-950/40",
+      rejected: "text-red-400 border-red-900 bg-red-950/40"
+    };
+
+    async function loadProfile() {
+      try {
+        const response = await fetch("/me", {
+          headers: { "Authorization": "Bearer " + token }
+        });
+
+        if (response.status === 401) {
+          localStorage.removeItem("kevo_token");
+          window.location.href = "/app/";
+          return;
+        }
+
+        if (!response.ok) {
+          document.getElementById("loading").textContent = "Could not load profile.";
+          return;
+        }
+
+        const user = await response.json();
+
+        document.getElementById("user-name").textContent = user.name;
+        document.getElementById("field-name").textContent = user.name;
+        document.getElementById("field-email").textContent = user.email;
+        document.getElementById("field-role").textContent = user.role;
+        document.getElementById("field-account-type").textContent = user.account_type;
+        document.getElementById("field-jurisdiction").textContent = user.jurisdiction || "Not set";
+
+        const kycBadge = document.getElementById("field-kyc-status");
+        const colorClass = kycColors[user.kyc_status] || kycColors.not_started;
+        kycBadge.className = "inline-block text-xs uppercase tracking-wide px-2 py-1 border " + colorClass;
+        kycBadge.textContent = user.kyc_status.replace(/_/g, " ");
+
+        document.getElementById("loading").classList.add("hidden");
+        document.getElementById("profile-card").classList.remove("hidden");
+      } catch (err) {
+        document.getElementById("loading").textContent = "Could not reach the server.";
+      }
+    }
+
+    document.getElementById("logout-btn").addEventListener("click", function () {
+      localStorage.removeItem("kevo_token");
+      window.location.href = "/app/";
+    });
+
+    loadProfile();
+  </script>
+
+</body>
+</html>
