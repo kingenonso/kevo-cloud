@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KEVO — Settlement</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#0a0e17] min-h-screen text-slate-200 font-sans">
+
+  <header class="border-b border-slate-800 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="text-lg font-semibold tracking-widest uppercase text-white">KEVO</div>
+      <div class="h-4 w-px bg-slate-700"></div>
+      <div class="text-xs text-slate-500 uppercase tracking-wide">Settlement</div>
+    </div>
+    <nav class="flex items-center gap-6">
+      <a href="/app/dashboard.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Dashboard</a>
+      <a href="/app/listings.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">My Listings</a>
+      <a href="/app/browse.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Browse</a>
+      <a href="/app/market.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Market Intel</a>
+      <a href="/app/kyc.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">KYC / AML</a>
+      <a href="/app/transactions.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Transactions</a>
+      <a href="/app/rofr.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">ROFR</a>
+      <a href="/app/settlement.html" class="text-xs uppercase tracking-wide text-white">Settlement</a>
+    </nav>
+    <div class="flex items-center gap-4">
+      <span id="user-name" class="text-sm text-slate-400"></span>
+      <button id="logout-btn"
+        class="text-xs uppercase tracking-wide text-slate-500 hover:text-white border border-slate-700 hover:border-slate-500 px-3 py-1.5 transition-colors">
+        Log Out
+      </button>
+    </div>
+  </header>
+
+  <main class="max-w-4xl mx-auto px-6 py-10 space-y-8">
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Your Settlement Records</div>
+      <div class="border border-slate-800 bg-[#0d1220]">
+        <div class="grid grid-cols-7 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
+          <div>ID</div>
+          <div>Transaction</div>
+          <div>Status</div>
+          <div>Funds Received</div>
+          <div>Shares Transferable</div>
+          <div>Funds Released</div>
+          <div>Notes</div>
+        </div>
+        <div id="settlement-rows"></div>
+        <div id="settlement-empty" class="px-6 py-6 text-sm text-slate-500 hidden">No settlement records yet.</div>
+      </div>
+    </section>
+
+    <section id="admin-start-section" class="hidden">
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Admin: Start Settlement</div>
+      <div class="border border-slate-800 bg-[#0d1220] p-6 space-y-4">
+        <div class="text-xs text-slate-500">Begins settlement tracking for a transaction already in "accepted" status. Admin only.</div>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Transaction ID</label>
+            <input id="start-tx-id" type="number" class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+          </div>
+        </div>
+        <button id="start-settlement-btn" class="text-xs uppercase tracking-wide bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 transition-colors">Start Settlement</button>
+        <div id="start-message" class="text-xs"></div>
+      </div>
+    </section>
+
+    <section id="admin-manage-section" class="hidden">
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Admin: Manage a Settlement Record</div>
+      <div class="border border-slate-800 bg-[#0d1220] p-6 space-y-6">
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Settlement Record ID</label>
+          <input id="manage-record-id" type="number" class="w-full max-w-xs bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+        </div>
+
+        <div class="border-t border-slate-800 pt-4 space-y-3">
+          <div class="text-xs text-slate-400">Confirm Funds Received</div>
+          <div class="grid grid-cols-2 gap-4">
+            <input id="escrow-reference" type="text" placeholder="Escrow provider reference (optional)" class="bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+            <input id="funds-notes" type="text" placeholder="Notes (optional)" class="bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+          </div>
+          <button id="confirm-funds-btn" class="text-xs uppercase tracking-wide border border-slate-700 hover:border-slate-500 text-slate-300 hover:text-white px-4 py-2 transition-colors">Confirm Funds Received</button>
+        </div>
+
+        <div class="border-t border-slate-800 pt-4 space-y-3">
+          <div class="text-xs text-slate-400">Confirm Shares Transferable</div>
+          <input id="shares-notes" type="text" placeholder="Notes (optional)" class="w-full max-w-md bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+          <button id="confirm-shares-btn" class="text-xs uppercase tracking-wide border border-slate-700 hover:border-slate-500 text-slate-300 hover:text-white px-4 py-2 transition-colors">Confirm Shares Transferable</button>
+        </div>
+
+        <div class="border-t border-slate-800 pt-4 space-y-3">
+          <div class="text-xs text-slate-400">Release Funds</div>
+          <div class="text-xs text-slate-500">Requires both funds received and shares transferable already confirmed.</div>
+          <button id="release-funds-btn" class="text-xs uppercase tracking-wide bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 transition-colors">Release Funds</button>
+        </div>
+
+        <div id="manage-message" class="text-xs"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    const token = localStorage.getItem("kevo_token");
+    if (!token) {
+      window.location.href = "/app/";
+    }
+    let myId = null;
+    let isAdmin = false;
+
+    function statusColor(status) {
+      const map = {
+        completed: "text-green-400 border-green-800 bg-green-950",
+        in_progress: "text-amber-400 border-amber-800 bg-amber-950",
+        pending: "text-slate-400 border-slate-700 bg-slate-900"
+      };
+      return map[status] || "text-slate-400 border-slate-700 bg-slate-900";
+    }
+
+    function badge(status) {
+      return `<span class="text-xs px-2 py-0.5 border ${statusColor(status)}">${status}</span>`;
+    }
+
+    function boolBadge(value) {
+      return value
+        ? `<span class="text-xs px-2 py-0.5 border text-green-400 border-green-800 bg-green-950">Yes</span>`
+        : `<span class="text-xs px-2 py-0.5 border text-slate-400 border-slate-700 bg-slate-900">No</span>`;
+    }
+
+    async function loadMe() {
+      const response = await fetch("/me", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+      const data = await response.json();
+      document.getElementById("user-name").textContent = data.name;
+      myId = data.id;
+      isAdmin = data.account_type === "admin";
+      if (isAdmin) {
+        document.getElementById("admin-start-section").classList.remove("hidden");
+        document.getElementById("admin-manage-section").classList.remove("hidden");
+      }
+      loadSettlementRecords();
+    }
+
+    async function loadSettlementRecords() {
+      const response = await fetch("/settlement-records", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+      const records = await response.json();
+      const rowsEl = document.getElementById("settlement-rows");
+      const emptyEl = document.getElementById("settlement-empty");
+      rowsEl.innerHTML = "";
+      if (records.length === 0) {
+        emptyEl.classList.remove("hidden");
+        return;
+      }
+      emptyEl.classList.add("hidden");
+      records.forEach(r => {
+        const row = document.createElement("div");
+        row.className = "grid grid-cols-7 gap-4 px-6 py-3 border-b border-slate-800 text-sm";
+        row.innerHTML = `
+          <div>${r.id}</div>
+          <div>${r.transaction_id}</div>
+          <div>${badge(r.status)}</div>
+          <div>${boolBadge(r.funds_received)}</div>
+          <div>${boolBadge(r.shares_confirmed_transferable)}</div>
+          <div>${boolBadge(r.funds_released)}</div>
+          <div class="text-slate-400">${r.notes || ""}</div>
+        `;
+        rowsEl.appendChild(row);
+      });
+    }
+
+    document.getElementById("start-settlement-btn").addEventListener("click", async () => {
+      const txId = document.getElementById("start-tx-id").value;
+      const messageEl = document.getElementById("start-message");
+      if (!txId) {
+        messageEl.textContent = "Enter a transaction ID.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      const response = await fetch(`/settlement-records?transaction_id=${txId}`, {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        messageEl.textContent = data.detail || "Failed to start settlement.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      messageEl.textContent = `Settlement record ${data.id} created.`;
+      messageEl.className = "text-xs text-green-400";
+      loadSettlementRecords();
+    });
+
+    document.getElementById("confirm-funds-btn").addEventListener("click", async () => {
+      const recordId = document.getElementById("manage-record-id").value;
+      const escrowRef = document.getElementById("escrow-reference").value;
+      const notes = document.getElementById("funds-notes").value;
+      const messageEl = document.getElementById("manage-message");
+      if (!recordId) {
+        messageEl.textContent = "Enter a settlement record ID.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      const params = new URLSearchParams();
+      if (escrowRef) params.set("escrow_provider_reference", escrowRef);
+      if (notes) params.set("notes", notes);
+      const response = await fetch(`/settlement-records/${recordId}/confirm-funds-received?${params.toString()}`, {
+        method: "PUT",
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        messageEl.textContent = data.detail || "Failed to confirm funds received.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      messageEl.textContent = "Funds received confirmed.";
+      messageEl.className = "text-xs text-green-400";
+      loadSettlementRecords();
+    });
+
+    document.getElementById("confirm-shares-btn").addEventListener("click", async () => {
+      const recordId = document.getElementById("manage-record-id").value;
+      const notes = document.getElementById("shares-notes").value;
+      const messageEl = document.getElementById("manage-message");
+      if (!recordId) {
+        messageEl.textContent = "Enter a settlement record ID.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      const params = new URLSearchParams();
+      if (notes) params.set("notes", notes);
+      const response = await fetch(`/settlement-records/${recordId}/confirm-shares-transferable?${params.toString()}`, {
+        method: "PUT",
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        messageEl.textContent = data.detail || "Failed to confirm shares transferable.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      messageEl.textContent = "Shares transferable confirmed.";
+      messageEl.className = "text-xs text-green-400";
+      loadSettlementRecords();
+    });
+
+    document.getElementById("release-funds-btn").addEventListener("click", async () => {
+      const recordId = document.getElementById("manage-record-id").value;
+      const messageEl = document.getElementById("manage-message");
+      if (!recordId) {
+        messageEl.textContent = "Enter a settlement record ID.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      const response = await fetch(`/settlement-records/${recordId}/release-funds`, {
+        method: "PUT",
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        messageEl.textContent = data.detail || "Failed to release funds.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      messageEl.textContent = "Funds released. Transaction completed.";
+      messageEl.className = "text-xs text-green-400";
+      loadSettlementRecords();
+    });
+
+    document.getElementById("logout-btn").addEventListener("click", () => {
+      localStorage.removeItem("kevo_token");
+      window.location.href = "/app/";
+    });
+
+    loadMe();
+  </script>
+</body>
+</html>

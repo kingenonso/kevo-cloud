@@ -1350,6 +1350,15 @@ def verify_ownership(
     }
 
 
+@app.get("/ownership-records")
+def get_ownership_records(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type == "admin":
+        return db.query(OwnershipRecord).all()
+    return db.query(OwnershipRecord).filter(OwnershipRecord.seller_id == current_user.id).all()
+
 
 @app.post("/listings")
 def create_listing(
