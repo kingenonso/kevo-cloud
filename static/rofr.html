@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KEVO — ROFR Requests</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#0a0e17] min-h-screen text-slate-200 font-sans">
+
+  <header class="border-b border-slate-800 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="text-lg font-semibold tracking-widest uppercase text-white">KEVO</div>
+      <div class="h-4 w-px bg-slate-700"></div>
+      <div class="text-xs text-slate-500 uppercase tracking-wide">ROFR Requests</div>
+    </div>
+    <nav class="flex items-center gap-6">
+      <a href="/app/dashboard.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Dashboard</a>
+      <a href="/app/listings.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">My Listings</a>
+      <a href="/app/browse.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Browse</a>
+      <a href="/app/market.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Market Intel</a>
+      <a href="/app/kyc.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">KYC / AML</a>
+      <a href="/app/transactions.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Transactions</a>
+      <a href="/app/rofr.html" class="text-xs uppercase tracking-wide text-white">ROFR</a>
+    </nav>
+    <div class="flex items-center gap-4">
+      <span id="user-name" class="text-sm text-slate-400"></span>
+      <button id="logout-btn"
+        class="text-xs uppercase tracking-wide text-slate-500 hover:text-white border border-slate-700 hover:border-slate-500 px-3 py-1.5 transition-colors">
+        Log Out
+      </button>
+    </div>
+  </header>
+
+  <main class="max-w-4xl mx-auto px-6 py-10 space-y-8">
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Your ROFR Requests</div>
+      <div class="border border-slate-800 bg-[#0d1220]">
+        <div class="grid grid-cols-5 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
+          <div>ID</div>
+          <div>Transaction</div>
+          <div>Rule ID</div>
+          <div>Status</div>
+          <div>Notes</div>
+        </div>
+        <div id="rofr-rows"></div>
+        <div id="rofr-empty" class="px-6 py-6 text-sm text-slate-500 hidden">No ROFR requests yet.</div>
+      </div>
+    </section>
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Submit a ROFR Request</div>
+      <div class="border border-slate-800 bg-[#0d1220] p-6 space-y-4">
+        <div class="text-xs text-slate-500">Only the seller on a transaction (or an admin) can submit a ROFR request for it. Enter the transaction ID, load its applicable transferability rules, then pick one.</div>
+        <div class="flex gap-4 items-end">
+          <div class="flex-1">
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-2">Transaction ID</label>
+            <input id="rofr-tx-id" type="number" required class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-white focus:outline-none focus:border-blue-600">
+          </div>
+          <button id="load-rules-btn" type="button" class="text-xs uppercase tracking-wide text-white bg-slate-700 hover:bg-slate-600 px-4 py-2 transition-colors">Load Applicable Rules</button>
+        </div>
+        <div id="rules-status" class="text-xs text-slate-500"></div>
+        <form id="rofr-form" class="space-y-4 hidden">
+          <div>
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-2">Applicable Rule</label>
+            <select id="rule-select" required class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-white focus:outline-none focus:border-blue-600"></select>
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-2">Source Reference (optional)</label>
+            <input id="rofr-source-reference" type="text" class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-white focus:outline-none focus:border-blue-600" placeholder="e.g. board consent letter reference">
+          </div>
+          <button type="submit" class="text-xs uppercase tracking-wide text-white bg-blue-600 hover:bg-blue-500 px-4 py-2 transition-colors">Submit ROFR Request</button>
+        </form>
+        <div id="rofr-message" class="text-xs"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    const token = localStorage.getItem("kevo_token");
+    if (!token) {
+      window.location.href = "/app/";
+    }
+
+    let myId = null;
+    let currentListingId = null;
+
+    function statusColor(status) {
+      const map = {
+        pending: "text-amber-400 border-amber-900 bg-amber-950/40",
+        approved: "text-green-400 border-green-900 bg-green-950/40",
+        waived: "text-green-400 border-green-900 bg-green-950/40",
+        exercised: "text-red-400 border-red-900 bg-red-950/40"
+      };
+      return map[status] || "text-slate-400 border-slate-700 bg-slate-900/40";
+    }
+
+    function badge(status) {
+      return "<span class=\"inline-block text-xs uppercase tracking-wide px-2 py-1 border " + statusColor(status) + "\">" + status + "</span>";
+    }
+
+    async function loadMe() {
+      const response = await fetch("/me", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+      const data = await response.json();
+      document.getElementById("user-name").textContent = data.name;
+      myId = data.id;
+      loadRofrRequests();
+    }
+
+    async function loadRofrRequests() {
+      const response = await fetch("/rofr-requests", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+      const requests = await response.json();
+
+      const rows = document.getElementById("rofr-rows");
+      const empty = document.getElementById("rofr-empty");
+      rows.innerHTML = "";
+
+      if (requests.length === 0) {
+        empty.classList.remove("hidden");
+        return;
+      }
+      empty.classList.add("hidden");
+
+      requests.forEach(function (r) {
+        const row = document.createElement("div");
+        row.className = "grid grid-cols-5 gap-4 px-6 py-3 border-b border-slate-800 last:border-b-0 text-sm";
+        row.innerHTML =
+          "<div class=\"font-mono\">" + r.id + "</div>" +
+          "<div class=\"font-mono\">" + r.transaction_id + "</div>" +
+          "<div class=\"font-mono\">" + r.transferability_rule_id + "</div>" +
+          "<div>" + badge(r.status) + "</div>" +
+          "<div class=\"text-slate-400\">" + (r.response_notes || "&mdash;") + "</div>";
+        rows.appendChild(row);
+      });
+    }
+
+    document.getElementById("load-rules-btn").addEventListener("click", async function () {
+      const statusEl = document.getElementById("rules-status");
+      const form = document.getElementById("rofr-form");
+      form.classList.add("hidden");
+      statusEl.textContent = "";
+
+      const txId = document.getElementById("rofr-tx-id").value;
+      if (!txId) {
+        statusEl.textContent = "Enter a transaction ID first.";
+        return;
+      }
+
+      const txResponse = await fetch("/transactions/" + txId, {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      if (!txResponse.ok) {
+        const errorData = await txResponse.json();
+        statusEl.textContent = errorData.detail || "Could not load transaction.";
+        return;
+      }
+      const txData = await txResponse.json();
+      currentListingId = txData.transaction.listing_id;
+
+      const rulesResponse = await fetch("/transferability/listing/" + currentListingId + "/applicable-rules", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      if (!rulesResponse.ok) {
+        statusEl.textContent = "Could not load applicable rules for this listing.";
+        return;
+      }
+      const rulesData = await rulesResponse.json();
+
+      if (rulesData.applicable_rules.length === 0) {
+        statusEl.textContent = "No transferability rules apply to this transaction's listing (jurisdiction/asset type has no rule on file) — a ROFR request cannot be created.";
+        return;
+      }
+
+      const select = document.getElementById("rule-select");
+      select.innerHTML = "";
+      rulesData.applicable_rules.forEach(function (rule) {
+        const option = document.createElement("option");
+        option.value = rule.id;
+        option.textContent = rule.rule_code + " — " + rule.requirement.slice(0, 80);
+        select.appendChild(option);
+      });
+
+      statusEl.textContent = rulesData.applicable_rules.length + " applicable rule(s) found.";
+      form.classList.remove("hidden");
+    });
+
+    document.getElementById("rofr-form").addEventListener("submit", async function (event) {
+      event.preventDefault();
+      const messageEl = document.getElementById("rofr-message");
+      messageEl.textContent = "";
+
+      const payload = {
+        transaction_id: parseInt(document.getElementById("rofr-tx-id").value, 10),
+        transferability_rule_id: parseInt(document.getElementById("rule-select").value, 10),
+        source_reference: document.getElementById("rofr-source-reference").value || null
+      };
+
+      const response = await fetch("/rofr-requests", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + token,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+
+      if (response.ok) {
+        messageEl.textContent = "ROFR request submitted.";
+        messageEl.className = "text-xs text-emerald-400";
+        document.getElementById("rofr-form").reset();
+        document.getElementById("rofr-form").classList.add("hidden");
+        document.getElementById("rules-status").textContent = "";
+        loadRofrRequests();
+      } else {
+        const errorData = await response.json();
+        messageEl.textContent = errorData.detail || "Could not submit ROFR request.";
+        messageEl.className = "text-xs text-red-400";
+      }
+    });
+
+    document.getElementById("logout-btn").addEventListener("click", function () {
+      localStorage.removeItem("kevo_token");
+      window.location.href = "/app/";
+    });
+
+    loadMe();
+  </script>
+
+</body>
+</html>
