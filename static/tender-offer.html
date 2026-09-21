@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KEVO — Tender Offer Programs</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#0a0e17] min-h-screen text-slate-200 font-sans">
+
+  <header class="border-b border-slate-800 px-6 py-4 space-y-3">
+    <div class="flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="text-lg font-semibold tracking-widest uppercase text-white">KEVO</div>
+      <div class="h-4 w-px bg-slate-700"></div>
+      <div class="text-xs text-slate-500 uppercase tracking-wide">Tender Offer Programs</div>
+    </div>
+    <div class="flex items-center gap-4">
+      <span id="user-name" class="text-sm text-slate-400"></span>
+      <button id="logout-btn"
+        class="text-xs uppercase tracking-wide text-slate-500 hover:text-white border border-slate-700 hover:border-slate-500 px-3 py-1.5 transition-colors">
+        Log Out
+      </button>
+    </div>
+    </div>
+    <nav class="flex items-center gap-x-6 gap-y-2 flex-wrap">
+      <a href="/app/dashboard.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Dashboard</a>
+      <a href="/app/listings.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">My Listings</a>
+      <a href="/app/browse.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Browse</a>
+      <a href="/app/market.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Market Intel</a>
+      <a href="/app/kyc.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">KYC / AML</a>
+      <a href="/app/transactions.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Transactions</a>
+      <a href="/app/rofr.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">ROFR</a>
+      <a href="/app/settlement.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Settlement</a>
+      <a href="/app/lending.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Lending</a>
+      <a href="/app/funding.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Funding</a>
+      <a href="/app/ledger.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Ledger</a>
+      <a href="/app/tender-offer.html" class="text-xs uppercase tracking-wide text-white">Tender Offer</a>
+    </nav>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-6 py-10 space-y-8">
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Tender Offer Programs</div>
+      <div class="border border-slate-800 bg-[#0d1220]">
+        <div class="grid grid-cols-6 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
+          <div>ID</div>
+          <div>Company</div>
+          <div>Jurisdiction</div>
+          <div>Price/Share</div>
+          <div>Window</div>
+          <div>Status / Action</div>
+        </div>
+        <div id="program-rows"></div>
+        <div id="program-empty" class="px-6 py-6 text-sm text-slate-500 hidden">No tender offer programs yet.</div>
+      </div>
+    </section>
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Elect to Participate</div>
+      <div class="border border-slate-800 bg-[#0d1220] p-6 space-y-4">
+        <div class="text-xs text-slate-500">Offer some or all of a verified holding into an open program for its company. KEVO records your election — the company's admin decides how much of it to accept.</div>
+        <div class="grid grid-cols-3 gap-4">
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Program ID</label>
+            <input id="election-program-id" type="number" class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Ownership Record ID</label>
+            <input id="election-ownership-id" type="number" class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Shares Offered</label>
+            <input id="election-shares" type="number" class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+          </div>
+        </div>
+        <button id="submit-election-btn" class="text-xs uppercase tracking-wide bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 transition-colors">Submit Election</button>
+        <div id="election-message" class="text-xs"></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Your Elections</div>
+      <div class="border border-slate-800 bg-[#0d1220]">
+        <div class="grid grid-cols-6 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
+          <div>ID</div>
+          <div>Program</div>
+          <div>Shares Offered</div>
+          <div>Shares Accepted</div>
+          <div>Status</div>
+          <div>Action</div>
+        </div>
+        <div id="election-rows"></div>
+        <div id="election-empty" class="px-6 py-6 text-sm text-slate-500 hidden">No elections yet.</div>
+      </div>
+    </section>
+
+    <section id="admin-create-section" class="hidden">
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Admin: Create a Tender Offer Program</div>
+      <div class="border border-slate-800 bg-[#0d1220] p-6 space-y-4">
+        <div class="text-xs text-slate-500">KEVO never sets a price, window, or allocation — record the company's own decision here.</div>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Company</label>
+            <input id="create-company" type="text" class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Jurisdiction</label>
+            <input id="create-jurisdiction" type="text" placeholder="e.g. United States" class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Price Per Share</label>
+            <input id="create-price" type="number" step="0.01" class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Source Reference (optional)</label>
+            <input id="create-source" type="text" class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Opens At</label>
+            <input id="create-opens" type="datetime-local" class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Closes At</label>
+            <input id="create-closes" type="datetime-local" class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+          </div>
+        </div>
+        <button id="create-program-btn" class="text-xs uppercase tracking-wide bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 transition-colors">Create Program</button>
+        <div id="create-program-message" class="text-xs"></div>
+      </div>
+    </section>
+
+    <section id="admin-finalize-section" class="hidden">
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Admin: Finalize an Election</div>
+      <div class="border border-slate-800 bg-[#0d1220] p-6 space-y-4">
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Election ID</label>
+          <input id="finalize-election-id" type="number" class="w-full max-w-xs bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Shares Accepted (required when accepting)</label>
+          <input id="finalize-shares-accepted" type="number" class="w-full max-w-xs bg-[#0a0e17] border border-slate-700 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-slate-500">
+        </div>
+        <div class="flex gap-3">
+          <button id="accept-election-btn" class="text-xs uppercase tracking-wide bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 transition-colors">Accept</button>
+          <button id="decline-election-btn" class="text-xs uppercase tracking-wide border border-slate-700 hover:border-slate-500 text-slate-300 hover:text-white px-4 py-2 transition-colors">Decline</button>
+        </div>
+        <div id="finalize-message" class="text-xs"></div>
+      </div>
+    </section>
+
+  </main>
+  <script>
+    const token = localStorage.getItem("kevo_token");
+    if (!token) {
+      window.location.href = "/app/";
+    }
+    let myId = null;
+    let isAdmin = false;
+
+    function statusColor(status) {
+      const map = {
+        open: "text-green-400 border-green-800 bg-green-950",
+        closed: "text-slate-400 border-slate-700 bg-slate-900",
+        pending: "text-amber-400 border-amber-800 bg-amber-950",
+        accepted: "text-green-400 border-green-800 bg-green-950",
+        declined: "text-red-400 border-red-800 bg-red-950",
+        withdrawn: "text-slate-400 border-slate-700 bg-slate-900"
+      };
+      return map[status] || "text-slate-400 border-slate-700 bg-slate-900";
+    }
+
+    function badge(status) {
+      return `<span class="text-xs px-2 py-0.5 border ${statusColor(status)}">${status}</span>`;
+    }
+
+    function fmtWindow(opensAt, closesAt) {
+      const opens = opensAt ? opensAt.replace("T", " ").slice(0, 16) : "";
+      const closes = closesAt ? closesAt.replace("T", " ").slice(0, 16) : "";
+      return `${opens} → ${closes}`;
+    }
+
+    async function loadMe() {
+      const response = await fetch("/me", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+      const data = await response.json();
+      document.getElementById("user-name").textContent = data.name;
+      myId = data.id;
+      isAdmin = data.account_type === "admin";
+      if (isAdmin) {
+        document.getElementById("admin-create-section").classList.remove("hidden");
+        document.getElementById("admin-finalize-section").classList.remove("hidden");
+      }
+      loadPrograms();
+      loadElections();
+    }
+
+    async function loadPrograms() {
+      const response = await fetch("/tender-offer-programs", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+      const programs = await response.json();
+      const rowsEl = document.getElementById("program-rows");
+      const emptyEl = document.getElementById("program-empty");
+      rowsEl.innerHTML = "";
+      if (programs.length === 0) {
+        emptyEl.classList.remove("hidden");
+        return;
+      }
+      emptyEl.classList.add("hidden");
+      programs.forEach(p => {
+        const row = document.createElement("div");
+        row.className = "grid grid-cols-6 gap-4 px-6 py-3 border-b border-slate-800 text-sm items-center";
+        const canClose = isAdmin && p.status === "open";
+        row.innerHTML = `
+          <div>${p.id}</div>
+          <div>${p.company}</div>
+          <div class="text-slate-400">${p.jurisdiction}</div>
+          <div>$${p.price_per_share}</div>
+          <div class="text-slate-400 text-xs">${fmtWindow(p.opens_at, p.closes_at)}</div>
+          <div class="flex items-center gap-2">${badge(p.status)}${canClose ? `<button class="close-program-btn text-xs uppercase tracking-wide border border-slate-700 hover:border-slate-500 text-slate-300 hover:text-white px-2 py-1 transition-colors" data-id="${p.id}">Close</button>` : ""}</div>
+        `;
+        rowsEl.appendChild(row);
+      });
+      document.querySelectorAll(".close-program-btn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const id = btn.getAttribute("data-id");
+          await fetch(`/tender-offer-programs/${id}/close`, {
+            method: "PUT",
+            headers: { "Authorization": "Bearer " + token }
+          });
+          loadPrograms();
+        });
+      });
+    }
+
+    async function loadElections() {
+      const response = await fetch("/tender-offer-elections", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+      const elections = await response.json();
+      const rowsEl = document.getElementById("election-rows");
+      const emptyEl = document.getElementById("election-empty");
+      rowsEl.innerHTML = "";
+      if (elections.length === 0) {
+        emptyEl.classList.remove("hidden");
+        return;
+      }
+      emptyEl.classList.add("hidden");
+      elections.forEach(e => {
+        const row = document.createElement("div");
+        row.className = "grid grid-cols-6 gap-4 px-6 py-3 border-b border-slate-800 text-sm items-center";
+        const canWithdraw = e.holder_id === myId && e.status === "pending";
+        row.innerHTML = `
+          <div>${e.id}</div>
+          <div>${e.program_id}</div>
+          <div>${e.shares_offered}</div>
+          <div class="text-slate-400">${e.shares_accepted !== null ? e.shares_accepted : "—"}</div>
+          <div>${badge(e.status)}</div>
+          <div>${canWithdraw ? `<button class="withdraw-election-btn text-xs uppercase tracking-wide border border-slate-700 hover:border-slate-500 text-slate-300 hover:text-white px-3 py-1 transition-colors" data-id="${e.id}">Withdraw</button>` : ""}</div>
+        `;
+        rowsEl.appendChild(row);
+      });
+      document.querySelectorAll(".withdraw-election-btn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const id = btn.getAttribute("data-id");
+          await fetch(`/tender-offer-elections/${id}/withdraw`, {
+            method: "PUT",
+            headers: { "Authorization": "Bearer " + token }
+          });
+          loadElections();
+        });
+      });
+    }
+
+    document.getElementById("submit-election-btn").addEventListener("click", async () => {
+      const programId = document.getElementById("election-program-id").value;
+      const ownershipId = document.getElementById("election-ownership-id").value;
+      const shares = document.getElementById("election-shares").value;
+      const messageEl = document.getElementById("election-message");
+      if (!programId || !ownershipId || !shares) {
+        messageEl.textContent = "Fill in program ID, ownership record ID, and shares offered.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      const params = new URLSearchParams();
+      params.set("program_id", programId);
+      params.set("ownership_record_id", ownershipId);
+      params.set("shares_offered", shares);
+      const response = await fetch(`/tender-offer-elections?${params.toString()}`, {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        messageEl.textContent = data.detail || "Failed to submit election.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      messageEl.textContent = `Election ${data.id} submitted.`;
+      messageEl.className = "text-xs text-green-400";
+      loadElections();
+    });
+
+    document.getElementById("create-program-btn").addEventListener("click", async () => {
+      const company = document.getElementById("create-company").value;
+      const jurisdiction = document.getElementById("create-jurisdiction").value;
+      const price = document.getElementById("create-price").value;
+      const source = document.getElementById("create-source").value;
+      const opens = document.getElementById("create-opens").value;
+      const closes = document.getElementById("create-closes").value;
+      const messageEl = document.getElementById("create-program-message");
+      if (!company || !jurisdiction || !price || !opens || !closes) {
+        messageEl.textContent = "Fill in company, jurisdiction, price, and both dates.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      const params = new URLSearchParams();
+      params.set("company", company);
+      params.set("jurisdiction", jurisdiction);
+      params.set("price_per_share", price);
+      params.set("opens_at", opens);
+      params.set("closes_at", closes);
+      if (source) params.set("source_reference", source);
+      const response = await fetch(`/tender-offer-programs?${params.toString()}`, {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        messageEl.textContent = data.detail || "Failed to create program.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      messageEl.textContent = `Program ${data.id} created.`;
+      messageEl.className = "text-xs text-green-400";
+      loadPrograms();
+    });
+
+    async function finalizeElection(accepted) {
+      const id = document.getElementById("finalize-election-id").value;
+      const sharesAccepted = document.getElementById("finalize-shares-accepted").value;
+      const messageEl = document.getElementById("finalize-message");
+      if (!id) {
+        messageEl.textContent = "Enter an election ID.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      const params = new URLSearchParams();
+      params.set("accepted", accepted);
+      if (accepted && sharesAccepted) params.set("shares_accepted", sharesAccepted);
+      const response = await fetch(`/tender-offer-elections/${id}/finalize?${params.toString()}`, {
+        method: "PUT",
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        messageEl.textContent = data.detail || "Failed to finalize election.";
+        messageEl.className = "text-xs text-red-400";
+        return;
+      }
+      messageEl.textContent = `Election ${data.id} ${data.status}.`;
+      messageEl.className = "text-xs text-green-400";
+      loadElections();
+    }
+
+    document.getElementById("accept-election-btn").addEventListener("click", () => finalizeElection(true));
+    document.getElementById("decline-election-btn").addEventListener("click", () => finalizeElection(false));
+
+    document.getElementById("logout-btn").addEventListener("click", () => {
+      localStorage.removeItem("kevo_token");
+      window.location.href = "/app/";
+    });
+
+    loadMe();
+  </script>
+</body>
+</html>
