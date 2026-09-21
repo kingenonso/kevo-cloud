@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KEVO — Log In</title>
+<title>KEVO — Sign Up</title>
 <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-[#0a0e17] min-h-screen flex items-center justify-center text-slate-200 font-sans">
@@ -13,10 +13,16 @@
     <div class="mb-8">
       <div class="text-xl font-semibold tracking-widest uppercase text-white">KEVO</div>
       <div class="h-0.5 w-8 bg-blue-600 mt-2 mb-3"></div>
-      <div class="text-xs text-slate-500 uppercase tracking-wide">Private-Market Infrastructure</div>
+      <div class="text-xs text-slate-500 uppercase tracking-wide">Create Your Account</div>
     </div>
 
-    <form id="login-form" class="space-y-4">
+    <form id="signup-form" class="space-y-4">
+      <div>
+        <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="name">Name</label>
+        <input id="name" name="name" type="text" required
+          class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+      </div>
+
       <div>
         <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="email">Email</label>
         <input id="email" name="email" type="email" required
@@ -30,70 +36,71 @@
       </div>
 
       <div id="error-message" class="hidden text-sm text-red-400 border border-red-900 bg-red-950/40 px-3 py-2"></div>
+      <div id="success-message" class="hidden text-sm text-emerald-400 border border-emerald-900 bg-emerald-950/40 px-3 py-2"></div>
 
       <button type="submit" id="submit-btn"
         class="w-full bg-blue-600 hover:bg-blue-500 text-white text-sm uppercase tracking-wide py-2 transition-colors">
-        Log In
+        Sign Up
       </button>
     </form>
 
     <div class="mt-4 text-center">
-      <a href="/app/signup.html" class="text-xs text-slate-500 hover:text-white transition-colors">Don't have an account? Sign up</a>
+      <a href="/app/" class="text-xs text-slate-500 hover:text-white transition-colors">Already have an account? Log in</a>
     </div>
 
   </div>
 
   <script>
-    const form = document.getElementById("login-form");
+    const form = document.getElementById("signup-form");
     const errorBox = document.getElementById("error-message");
+    const successBox = document.getElementById("success-message");
     const submitBtn = document.getElementById("submit-btn");
 
     function showError(message) {
       errorBox.textContent = message;
       errorBox.classList.remove("hidden");
+      successBox.classList.add("hidden");
     }
 
-    function hideError() {
+    function showSuccess(message) {
+      successBox.textContent = message;
+      successBox.classList.remove("hidden");
       errorBox.classList.add("hidden");
     }
 
     form.addEventListener("submit", async function (event) {
       event.preventDefault();
-      hideError();
+      errorBox.classList.add("hidden");
+      successBox.classList.add("hidden");
       submitBtn.disabled = true;
-      submitBtn.textContent = "Logging in...";
+      submitBtn.textContent = "Creating account...";
 
+      const name = document.getElementById("name").value;
       const email = document.getElementById("email").value;
       const password = document.getElementById("password").value;
 
       try {
-        const response = await fetch("/login", {
+        const response = await fetch("/users", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: email, password: password })
+          body: JSON.stringify({ name: name, email: email, password: password })
         });
 
         if (response.ok) {
-          const data = await response.json();
-          localStorage.setItem("kevo_token", data.access_token);
-          window.location.href = "/app/dashboard.html";
+          showSuccess("Account created. Redirecting to log in...");
+          setTimeout(function () {
+            window.location.href = "/app/";
+          }, 1500);
           return;
         }
 
-        if (response.status === 401) {
-          showError("Incorrect email or password.");
-        } else if (response.status === 423) {
-          showError("Account temporarily locked due to repeated failed attempts. Try again later.");
-        } else if (response.status === 429) {
-          showError("Too many attempts. Please wait a moment and try again.");
-        } else {
-          showError("Something went wrong. Please try again.");
-        }
+        const errorData = await response.json();
+        showError(errorData.detail || "Could not create account.");
       } catch (err) {
         showError("Could not reach the server. Please check your connection.");
       } finally {
         submitBtn.disabled = false;
-        submitBtn.textContent = "Log In";
+        submitBtn.textContent = "Sign Up";
       }
     });
   </script>

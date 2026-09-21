@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KEVO — KYC / AML</title>
+<title>KEVO — Investor Eligibility</title>
 <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-[#0a0e17] min-h-screen text-slate-200 font-sans">
@@ -13,7 +13,7 @@
     <div class="flex items-center gap-3">
       <div class="text-lg font-semibold tracking-widest uppercase text-white">KEVO</div>
       <div class="h-4 w-px bg-slate-700"></div>
-      <div class="text-xs text-slate-500 uppercase tracking-wide">KYC / AML</div>
+      <div class="text-xs text-slate-500 uppercase tracking-wide">Investor Eligibility</div>
     </div>
     <div class="flex items-center gap-4">
       <span id="user-name" class="text-sm text-slate-400"></span>
@@ -29,8 +29,8 @@
       <a href="/app/browse.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Browse</a>
       <a href="/app/deal-alerts.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Deal Alerts</a>
       <a href="/app/market.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Market Intel</a>
-      <a href="/app/kyc.html" class="text-xs uppercase tracking-wide text-white">KYC / AML</a>
-      <a href="/app/eligibility.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Eligibility</a>
+      <a href="/app/kyc.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">KYC / AML</a>
+      <a href="/app/eligibility.html" class="text-xs uppercase tracking-wide text-white">Eligibility</a>
       <a href="/app/transactions.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Transactions</a>
       <a href="/app/rofr.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">ROFR</a>
       <a href="/app/settlement.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Settlement</a>
@@ -45,52 +45,51 @@
   <main class="max-w-4xl mx-auto px-6 py-10 space-y-8">
 
     <section>
-      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Your Verification Status</div>
-      <div class="border border-slate-800 bg-[#0d1220] p-6 flex items-center justify-between">
-        <div class="text-sm text-slate-400">Current KYC status</div>
-        <span id="kyc-status-badge" class="text-xs uppercase tracking-wide px-3 py-1.5 border"></span>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">What This Is</div>
+      <div class="border border-slate-800 bg-[#0d1220] p-6 text-sm text-slate-400">
+        Investor eligibility records what kind of investor you are (e.g. accredited, sophisticated), which some listings' compliance rules require before a match or transaction can proceed. Submit a record below; an admin reviews and verifies it separately.
       </div>
     </section>
 
     <section>
-      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Submitted Facts</div>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Your Eligibility Records</div>
       <div class="border border-slate-800 bg-[#0d1220]">
         <div class="grid grid-cols-4 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
-          <div>Fact Type</div>
-          <div>Value</div>
+          <div>Investor Type</div>
+          <div>Classification</div>
           <div>Jurisdiction</div>
           <div>Status</div>
         </div>
-        <div id="facts-rows"></div>
-        <div id="facts-empty" class="px-6 py-6 text-sm text-slate-500 hidden">No KYC facts submitted yet.</div>
+        <div id="records-rows"></div>
+        <div id="records-empty" class="px-6 py-6 text-sm text-slate-500 hidden">No eligibility records submitted yet.</div>
       </div>
     </section>
 
     <section>
-      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Submit a New Fact</div>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Submit a New Record</div>
       <div class="border border-slate-800 bg-[#0d1220] p-6">
-        <form id="fact-form" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <form id="record-form" class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-2">Fact Type</label>
-            <input id="fact-type" type="text" required class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-white focus:outline-none focus:border-blue-600" placeholder="e.g. full_legal_name">
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-2">Investor Type</label>
+            <input id="investor-type" type="text" required class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-white focus:outline-none focus:border-blue-600" placeholder="e.g. individual">
           </div>
           <div>
-            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-2">Value</label>
-            <input id="fact-value" type="text" required class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-white focus:outline-none focus:border-blue-600" placeholder="e.g. Jane Doe">
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-2">Classification</label>
+            <input id="classification" type="text" required class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-white focus:outline-none focus:border-blue-600" placeholder="e.g. accredited">
           </div>
           <div>
             <label class="block text-xs uppercase tracking-wide text-slate-500 mb-2">Jurisdiction (optional)</label>
-            <input id="fact-jurisdiction" type="text" class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-white focus:outline-none focus:border-blue-600" placeholder="e.g. NG">
+            <input id="jurisdiction" type="text" class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-white focus:outline-none focus:border-blue-600" placeholder="e.g. NG">
           </div>
           <div>
-            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-2">As Of Date (optional)</label>
-            <input id="fact-date" type="date" class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-white focus:outline-none focus:border-blue-600">
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-2">Effective Date (optional)</label>
+            <input id="effective-date" type="date" class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-white focus:outline-none focus:border-blue-600">
           </div>
           <div class="md:col-span-2">
-            <button type="submit" class="text-xs uppercase tracking-wide text-white bg-blue-600 hover:bg-blue-500 px-4 py-2 transition-colors">Submit Fact</button>
+            <button type="submit" class="text-xs uppercase tracking-wide text-white bg-blue-600 hover:bg-blue-500 px-4 py-2 transition-colors">Submit Record</button>
           </div>
         </form>
-        <div id="fact-message" class="text-xs mt-3"></div>
+        <div id="record-message" class="text-xs mt-3"></div>
       </div>
     </section>
 
@@ -129,11 +128,11 @@
       const data = await response.json();
       document.getElementById("user-name").textContent = data.name;
       myId = data.id;
-      loadKycFacts();
+      loadRecords();
     }
 
-    async function loadKycFacts() {
-      const response = await fetch("/kyc-facts/user/" + myId, {
+    async function loadRecords() {
+      const response = await fetch("/investor-eligibility", {
         headers: { "Authorization": "Bearer " + token }
       });
       if (response.status === 401) {
@@ -141,49 +140,45 @@
         window.location.href = "/app/";
         return;
       }
-      const data = await response.json();
+      const records = await response.json();
 
-      const badge = document.getElementById("kyc-status-badge");
-      badge.textContent = data.kyc_status.replace(/_/g, " ").toUpperCase();
-      badge.className = "text-xs uppercase tracking-wide px-3 py-1.5 border " + statusBadgeClasses(data.kyc_status);
-
-      const rows = document.getElementById("facts-rows");
-      const empty = document.getElementById("facts-empty");
+      const rows = document.getElementById("records-rows");
+      const empty = document.getElementById("records-empty");
       rows.innerHTML = "";
 
-      if (data.kyc_facts.length === 0) {
+      if (records.length === 0) {
         empty.classList.remove("hidden");
         return;
       }
       empty.classList.add("hidden");
 
-      data.kyc_facts.forEach(function (fact) {
+      records.forEach(function (record) {
         const row = document.createElement("div");
         row.className = "grid grid-cols-4 gap-4 px-6 py-3 border-b border-slate-800 last:border-b-0 text-sm";
-        const statusSpan = "<span class=\"text-xs uppercase tracking-wide px-2 py-1 border " + statusBadgeClasses(fact.verification_status) + "\">" + fact.verification_status + "</span>";
+        const statusSpan = "<span class=\"text-xs uppercase tracking-wide px-2 py-1 border " + statusBadgeClasses(record.status) + "\">" + record.status + "</span>";
         row.innerHTML =
-          "<div>" + fact.fact_type + "</div>" +
-          "<div class=\"font-mono\">" + fact.fact_value + "</div>" +
-          "<div>" + (fact.jurisdiction || "&mdash;") + "</div>" +
+          "<div>" + record.investor_type + "</div>" +
+          "<div>" + record.classification + "</div>" +
+          "<div>" + (record.jurisdiction || "&mdash;") + "</div>" +
           "<div>" + statusSpan + "</div>";
         rows.appendChild(row);
       });
     }
 
-    document.getElementById("fact-form").addEventListener("submit", async function (event) {
+    document.getElementById("record-form").addEventListener("submit", async function (event) {
       event.preventDefault();
-      const messageEl = document.getElementById("fact-message");
+      const messageEl = document.getElementById("record-message");
       messageEl.textContent = "";
 
       const payload = {
-        user_id: myId,
-        fact_type: document.getElementById("fact-type").value,
-        fact_value: document.getElementById("fact-value").value,
-        jurisdiction: document.getElementById("fact-jurisdiction").value || null,
-        as_of_date: document.getElementById("fact-date").value || null
+        buyer_id: myId,
+        investor_type: document.getElementById("investor-type").value,
+        classification: document.getElementById("classification").value,
+        jurisdiction: document.getElementById("jurisdiction").value || null,
+        effective_date: document.getElementById("effective-date").value || null
       };
 
-      const response = await fetch("/kyc-facts", {
+      const response = await fetch("/investor-eligibility", {
         method: "POST",
         headers: {
           "Authorization": "Bearer " + token,
@@ -199,13 +194,13 @@
       }
 
       if (response.ok) {
-        messageEl.textContent = "Fact submitted.";
+        messageEl.textContent = "Record submitted.";
         messageEl.className = "text-xs mt-3 text-emerald-400";
-        document.getElementById("fact-form").reset();
-        loadKycFacts();
+        document.getElementById("record-form").reset();
+        loadRecords();
       } else {
         const errorData = await response.json();
-        messageEl.textContent = errorData.detail || "Could not submit fact.";
+        messageEl.textContent = errorData.detail || "Could not submit record.";
         messageEl.className = "text-xs mt-3 text-red-400";
       }
     });

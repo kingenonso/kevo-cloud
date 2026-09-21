@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KEVO — Transactions</title>
+<title>KEVO — Account</title>
 <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-[#0a0e17] min-h-screen text-slate-200 font-sans">
@@ -13,7 +13,7 @@
     <div class="flex items-center gap-3">
       <div class="text-lg font-semibold tracking-widest uppercase text-white">KEVO</div>
       <div class="h-4 w-px bg-slate-700"></div>
-      <div class="text-xs text-slate-500 uppercase tracking-wide">Transactions</div>
+      <div class="text-xs text-slate-500 uppercase tracking-wide">Account</div>
     </div>
     <div class="flex items-center gap-4">
       <span id="user-name" class="text-sm text-slate-400"></span>
@@ -31,32 +31,38 @@
       <a href="/app/market.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Market Intel</a>
       <a href="/app/kyc.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">KYC / AML</a>
       <a href="/app/eligibility.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Eligibility</a>
-      <a href="/app/transactions.html" class="text-xs uppercase tracking-wide text-white">Transactions</a>
+      <a href="/app/transactions.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Transactions</a>
       <a href="/app/rofr.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">ROFR</a>
       <a href="/app/settlement.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Settlement</a>
       <a href="/app/lending.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Lending</a>
       <a href="/app/funding.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Funding</a>
       <a href="/app/ledger.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Ledger</a>
       <a href="/app/tender-offer.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Tender Offer</a>
-      <a href="/app/account.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Account</a>
+      <a href="/app/account.html" class="text-xs uppercase tracking-wide text-white">Account</a>
     </nav>
   </header>
 
-  <main class="max-w-5xl mx-auto px-6 py-10 space-y-8">
+  <main class="max-w-md mx-auto px-6 py-10 space-y-8">
 
     <section>
-      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Your Transactions</div>
-      <div class="border border-slate-800 bg-[#0d1220]">
-        <div class="grid grid-cols-6 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
-          <div>ID</div>
-          <div>Listing</div>
-          <div>You Are</div>
-          <div>Quantity</div>
-          <div>Price</div>
-          <div>Status</div>
-        </div>
-        <div id="tx-rows"></div>
-        <div id="tx-empty" class="px-6 py-6 text-sm text-slate-500 hidden">No transactions yet.</div>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Change Password</div>
+      <div class="border border-slate-800 bg-[#0d1220] p-6">
+        <form id="password-form" class="space-y-4">
+          <div>
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-2">Current Password</label>
+            <input id="current-password" type="password" required class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-white focus:outline-none focus:border-blue-600">
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-2">New Password</label>
+            <input id="new-password" type="password" required class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-white focus:outline-none focus:border-blue-600">
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-2">Confirm New Password</label>
+            <input id="confirm-password" type="password" required class="w-full bg-[#0a0e17] border border-slate-700 px-3 py-2 text-white focus:outline-none focus:border-blue-600">
+          </div>
+          <button type="submit" class="text-xs uppercase tracking-wide text-white bg-blue-600 hover:bg-blue-500 px-4 py-2 transition-colors">Change Password</button>
+        </form>
+        <div id="password-message" class="text-xs mt-3"></div>
       </div>
     </section>
 
@@ -67,8 +73,6 @@
     if (!token) {
       window.location.href = "/app/";
     }
-
-    let myId = null;
 
     async function loadMe() {
       const response = await fetch("/me", {
@@ -81,48 +85,54 @@
       }
       const data = await response.json();
       document.getElementById("user-name").textContent = data.name;
-      myId = data.id;
-      loadTransactions();
     }
 
-    async function loadTransactions() {
-      const response = await fetch("/transactions", {
-        headers: { "Authorization": "Bearer " + token }
+    document.getElementById("password-form").addEventListener("submit", async function (event) {
+      event.preventDefault();
+      const messageEl = document.getElementById("password-message");
+      messageEl.textContent = "";
+
+      const currentPassword = document.getElementById("current-password").value;
+      const newPassword = document.getElementById("new-password").value;
+      const confirmPassword = document.getElementById("confirm-password").value;
+
+      if (newPassword !== confirmPassword) {
+        messageEl.textContent = "New password and confirmation do not match.";
+        messageEl.className = "text-xs mt-3 text-red-400";
+        return;
+      }
+
+      const response = await fetch("/change-password", {
+        method: "PUT",
+        headers: {
+          "Authorization": "Bearer " + token,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
       });
+
       if (response.status === 401) {
-        localStorage.removeItem("kevo_token");
-        window.location.href = "/app/";
+        const errorData = await response.json();
+        if (errorData.detail === "Current password is incorrect") {
+          messageEl.textContent = "Current password is incorrect.";
+          messageEl.className = "text-xs mt-3 text-red-400";
+        } else {
+          localStorage.removeItem("kevo_token");
+          window.location.href = "/app/";
+        }
         return;
       }
-      const transactions = await response.json();
 
-      const rows = document.getElementById("tx-rows");
-      const empty = document.getElementById("tx-empty");
-      rows.innerHTML = "";
-
-      if (transactions.length === 0) {
-        empty.classList.remove("hidden");
-        return;
+      if (response.ok) {
+        messageEl.textContent = "Password changed successfully.";
+        messageEl.className = "text-xs mt-3 text-emerald-400";
+        document.getElementById("password-form").reset();
+      } else {
+        const errorData = await response.json();
+        messageEl.textContent = errorData.detail || "Could not change password.";
+        messageEl.className = "text-xs mt-3 text-red-400";
       }
-      empty.classList.add("hidden");
-
-      transactions.forEach(function (t) {
-        const youAre = t.buyer_id === myId ? "Buyer" : (t.seller_id === myId ? "Seller" : "Admin View");
-        const row = document.createElement("div");
-        row.className = "grid grid-cols-6 gap-4 px-6 py-3 border-b border-slate-800 last:border-b-0 text-sm cursor-pointer hover:bg-[#111827] transition-colors";
-        row.innerHTML =
-          "<div class=\"font-mono\">" + t.id + "</div>" +
-          "<div class=\"font-mono\">" + t.listing_id + "</div>" +
-          "<div>" + youAre + "</div>" +
-          "<div class=\"font-mono\">" + t.quantity + "</div>" +
-          "<div class=\"font-mono\">$" + t.agreed_price + " " + t.settlement_currency + "</div>" +
-          "<div>" + t.status + "</div>";
-        row.addEventListener("click", function () {
-          window.location.href = "/app/deal-room.html?id=" + t.id;
-        });
-        rows.appendChild(row);
-      });
-    }
+    });
 
     document.getElementById("logout-btn").addEventListener("click", function () {
       localStorage.removeItem("kevo_token");
