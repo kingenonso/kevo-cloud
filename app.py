@@ -199,6 +199,21 @@ class ComplianceRuleCreate(BaseModel):
     active: bool = True
     source_reference: str | None = None
 
+class ComplianceRuleUpdate(BaseModel):
+    buyer_jurisdiction: str | None = None
+    issuer_jurisdiction: str | None = None
+    asset_type: str | None = None
+    investor_classification: str | None = None
+    rule_code: str | None = None
+    description: str | None = None
+    fact_type: str | None = None
+    fact_validity_days: int | None = None
+    requirement: str | None = None
+    decision_if_unmet: str | None = None
+    requires_human_review: bool | None = None
+    active: bool | None = None
+    source_reference: str | None = None
+
 # ---------------------------------------------------------------------------
 # M13 - Compliance Engine (single-engine remediation, 2026-09-09)
 #
@@ -2456,6 +2471,66 @@ def get_compliance_rules(
         }
         for rule in rules
     ]
+
+@app.put("/compliance-rules/{rule_id}")
+def update_compliance_rule(
+    rule_id: int,
+    update: ComplianceRuleUpdate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only an admin can update compliance rules"
+        )
+
+    rule = db.query(ComplianceRule).filter(ComplianceRule.id == rule_id).first()
+
+    if rule is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Compliance rule not found"
+        )
+
+    update_data = update.dict(exclude_unset=True)
+
+    if "rule_code" in update_data and update_data["rule_code"] != rule.rule_code:
+        existing_rule = db.query(ComplianceRule).filter(
+            ComplianceRule.rule_code == update_data["rule_code"],
+            ComplianceRule.id != rule_id
+        ).first()
+        if existing_rule is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="Rule code already exists"
+            )
+
+    for field, value in update_data.items():
+        setattr(rule, field, value)
+
+    db.commit()
+    db.refresh(rule)
+
+    return {
+        "message": "Compliance rule updated",
+        "compliance_rule": {
+            "id": rule.id,
+            "buyer_jurisdiction": rule.buyer_jurisdiction,
+            "issuer_jurisdiction": rule.issuer_jurisdiction,
+            "asset_type": rule.asset_type,
+            "investor_classification": rule.investor_classification,
+            "rule_code": rule.rule_code,
+            "description": rule.description,
+            "fact_type": rule.fact_type,
+            "fact_validity_days": rule.fact_validity_days,
+            "requirement": rule.requirement,
+            "decision_if_unmet": rule.decision_if_unmet,
+            "requires_human_review": rule.requires_human_review,
+            "active": rule.active,
+            "source_reference": rule.source_reference
+        }
+    }
 
 
 @app.get("/buyer-interests/{interest_id}/matches")
