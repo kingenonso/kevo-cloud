@@ -21,7 +21,7 @@ import json
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection, DealAlert
 from models import Transaction
 import escrow_client
 app = FastAPI(title="KEVO API")
@@ -1389,6 +1389,28 @@ def create_listing(
     db.commit()
     db.refresh(new_listing)
 
+    # M31 (2026-09-21) - Smart Deal Alerts: reuse find_matches()'s exact
+    # same non-discretionary criteria (company, asset_type, price,
+    # quantity) to notify any buyer whose standing, active BuyerInterest
+    # already matches this brand-new listing, so they don't have to keep
+    # re-checking manually. Flat, chronological, never scored or ranked.
+    matching_interests = db.query(BuyerInterest).filter(
+        BuyerInterest.company == new_listing.company,
+        BuyerInterest.asset_type == new_listing.asset_type,
+        BuyerInterest.status == "active",
+        BuyerInterest.maximum_price >= new_listing.asking_price,
+        BuyerInterest.desired_quantity <= new_listing.quantity
+    ).all()
+    for interest in matching_interests:
+        db.add(DealAlert(
+            buyer_interest_id=interest.id,
+            listing_id=new_listing.id,
+            buyer_id=interest.buyer_id,
+            created_at=datetime.utcnow()
+        ))
+    if matching_interests:
+        db.commit()
+
     return {
         "message": "Listing created",
         "listing": {
@@ -2416,6 +2438,85 @@ def find_matches(
         "matches_found": len(matches),
         "matches": compliance_results
     }    
+
+@app.get("/deal-alerts")
+def list_deal_alerts(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type == "admin":
+        alerts = db.query(DealAlert).order_by(DealAlert.created_at.desc()).all()
+    else:
+        alerts = db.query(DealAlert).filter(
+            DealAlert.buyer_id == current_user.id
+        ).order_by(DealAlert.created_at.desc()).all()
+
+    return {
+        "alerts": [
+            {
+                "id": a.id,
+                "buyer_interest_id": a.buyer_interest_id,
+                "listing_id": a.listing_id,
+                "buyer_id": a.buyer_id,
+                "is_read": a.is_read,
+                "read_at": a.read_at.isoformat() if a.read_at else None,
+                "created_at": a.created_at.isoformat() if a.created_at else None
+            }
+            for a in alerts
+        ]
+    }
+
+
+@app.get("/deal-alerts/{alert_id}")
+def get_deal_alert(
+    alert_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    alert = db.query(DealAlert).filter(DealAlert.id == alert_id).first()
+
+    if alert is None:
+        raise HTTPException(status_code=404, detail="Deal alert not found")
+
+    if current_user.account_type != "admin" and current_user.id != alert.buyer_id:
+        raise HTTPException(status_code=403, detail="You can only view your own deal alerts")
+
+    return {
+        "id": alert.id,
+        "buyer_interest_id": alert.buyer_interest_id,
+        "listing_id": alert.listing_id,
+        "buyer_id": alert.buyer_id,
+        "is_read": alert.is_read,
+        "read_at": alert.read_at.isoformat() if alert.read_at else None,
+        "created_at": alert.created_at.isoformat() if alert.created_at else None
+    }
+
+
+@app.put("/deal-alerts/{alert_id}/mark-read")
+def mark_deal_alert_read(
+    alert_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    alert = db.query(DealAlert).filter(DealAlert.id == alert_id).first()
+
+    if alert is None:
+        raise HTTPException(status_code=404, detail="Deal alert not found")
+
+    if current_user.id != alert.buyer_id:
+        raise HTTPException(status_code=403, detail="You can only mark your own deal alerts as read")
+
+    alert.is_read = True
+    alert.read_at = datetime.utcnow()
+    db.commit()
+    db.refresh(alert)
+
+    return {
+        "id": alert.id,
+        "is_read": alert.is_read,
+        "read_at": alert.read_at.isoformat() if alert.read_at else None
+    }
+
 
 def build_position_passport(listing, db):
     ownership_record = db.query(OwnershipRecord).filter(
