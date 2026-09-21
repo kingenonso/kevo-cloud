@@ -127,6 +127,11 @@ class SetPasswordRequest(BaseModel):
     password: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
 class ListingCreate(BaseModel):
     seller_id: int
     listing_id: int | None = None
@@ -851,6 +856,30 @@ def set_password(
     db.commit()
 
     return {"message": "Password set successfully"}
+
+
+@app.put("/change-password")
+def change_password(
+    request: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.hashed_password is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No password set yet for this account. Use the set-password endpoint instead."
+        )
+
+    if not verify_password(request.current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=401,
+            detail="Current password is incorrect"
+        )
+
+    current_user.hashed_password = hash_password(request.new_password)
+    db.commit()
+
+    return {"message": "Password changed successfully"}
 
 
 @app.get("/compliance-rules/matches/{buyer_id}/{listing_id}")
