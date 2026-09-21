@@ -658,3 +658,27 @@ class TenderOfferElection(Base):
     status = Column(String(50), nullable=False, default="pending")
     created_at = Column(DateTime, nullable=False)
     decided_at = Column(DateTime, nullable=True)
+
+
+class DealAlert(Base):
+    """
+    M31 (first slice, 2026-09-21) - Smart Deal Alerts.
+
+    Reuses the exact same non-discretionary matching criteria as
+    find_matches() (GET /buyer-interests/{id}/matches) - company,
+    asset_type, price, quantity - fired automatically when a new listing
+    is created that matches an existing active BuyerInterest, so a buyer
+    doesn't have to keep re-checking manually. Flat and chronological by
+    design, never ranked or scored - matching M11's own corrected
+    no-scoring posture, kept for the same Rule 3b-16 non-discretionary
+    reasons.
+    """
+    __tablename__ = "deal_alerts"
+
+    id = Column(Integer, primary_key=True)
+    buyer_interest_id = Column(Integer, ForeignKey("buyer_interests.id"), nullable=False)
+    listing_id = Column(Integer, ForeignKey("listings.id"), nullable=False)
+    buyer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    is_read = Column(Boolean, nullable=False, default=False)
+    read_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False)

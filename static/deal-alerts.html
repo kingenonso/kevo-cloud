@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KEVO — Deal Alerts</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#0a0e17] min-h-screen text-slate-200 font-sans">
+
+  <header class="border-b border-slate-800 px-6 py-4 space-y-3">
+    <div class="flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="text-lg font-semibold tracking-widest uppercase text-white">KEVO</div>
+      <div class="h-4 w-px bg-slate-700"></div>
+      <div class="text-xs text-slate-500 uppercase tracking-wide">Deal Alerts</div>
+    </div>
+    <div class="flex items-center gap-4">
+      <span id="user-name" class="text-sm text-slate-400"></span>
+      <button id="logout-btn"
+        class="text-xs uppercase tracking-wide text-slate-500 hover:text-white border border-slate-700 hover:border-slate-500 px-3 py-1.5 transition-colors">
+        Log Out
+      </button>
+    </div>
+    </div>
+    <nav class="flex items-center gap-x-6 gap-y-2 flex-wrap">
+      <a href="/app/dashboard.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Dashboard</a>
+      <a href="/app/listings.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">My Listings</a>
+      <a href="/app/browse.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Browse</a>
+      <a href="/app/deal-alerts.html" class="text-xs uppercase tracking-wide text-white">Deal Alerts</a>
+      <a href="/app/market.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Market Intel</a>
+      <a href="/app/kyc.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">KYC / AML</a>
+      <a href="/app/transactions.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Transactions</a>
+      <a href="/app/rofr.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">ROFR</a>
+      <a href="/app/settlement.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Settlement</a>
+      <a href="/app/lending.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Lending</a>
+      <a href="/app/funding.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Funding</a>
+      <a href="/app/ledger.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Ledger</a>
+      <a href="/app/tender-offer.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Tender Offer</a>
+    </nav>
+  </header>
+
+  <main class="max-w-4xl mx-auto px-6 py-10 space-y-8">
+
+    <section>
+      <div class="flex items-center justify-between mb-4">
+        <div class="text-xs uppercase tracking-wide text-slate-500">Your Deal Alerts</div>
+        <div id="unread-count" class="text-xs text-slate-500"></div>
+      </div>
+      <div class="text-xs text-slate-600 mb-4">
+        Fires automatically whenever a new listing matches one of your active buyer interests
+        (same company, asset type, price at or under your maximum, quantity at or above what you want).
+        Alerts are never ranked or scored — just a flat, chronological list of real matches.
+      </div>
+      <div class="border border-slate-800 bg-[#0d1220]">
+        <div class="grid grid-cols-6 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
+          <div>Status</div>
+          <div>Company</div>
+          <div>Asset Type</div>
+          <div>Price</div>
+          <div>Quantity</div>
+          <div>Action</div>
+        </div>
+        <div id="alert-rows"></div>
+        <div id="alert-empty" class="px-6 py-6 text-sm text-slate-500 hidden">No deal alerts yet — you'll see one here the moment a listing matches one of your active buyer interests.</div>
+        <div id="alert-loading" class="px-6 py-6 text-sm text-slate-500">Loading alerts...</div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
