@@ -4432,14 +4432,40 @@ def create_settlement_record(
             currency=transaction.settlement_currency,
             description=f"KEVO transaction #{transaction.id}"
         )
-        escrow_client.agree_as_customer(escrow_txn["id"], buyer.email)
-        escrow_client.agree_as_customer(escrow_txn["id"], seller.email)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Could not set up the escrow transaction: {exc}")
+    # Escrow.com may not yet allow KEVO to auto-agree on a party's behalf
+    # (a partner permission that has to be individually granted). When
+    # that happens, this does not block settlement - it falls back to
+    # capturing that party's own one-click agree link from Escrow.com so
+    # the deal can still proceed. Once the permission is granted, this
+    # fallback simply stops being needed.
+    unagreed_emails = []
+    for party_email in (buyer.email, seller.email):
+        try:
+            escrow_client.agree_as_customer(escrow_txn["id"], party_email)
+        except Exception:
+            unagreed_emails.append(party_email)
+    notes_text = None
+    if unagreed_emails:
+        try:
+            refreshed = escrow_client.get_transaction(escrow_txn["id"])
+            links = [
+                f"{party.get('customer')}: {party.get('next_step')}"
+                for party in refreshed.get("parties", [])
+                if party.get("customer") in unagreed_emails and party.get("next_step")
+            ]
+        except Exception:
+            links = []
+        if links:
+            notes_text = "Awaiting manual agreement on Escrow.com - " + " | ".join(links)
+        else:
+            notes_text = "Awaiting manual agreement on Escrow.com for: " + ", ".join(unagreed_emails)
     settlement_record = SettlementRecord(
         transaction_id=transaction_id,
         status="pending",
-        escrow_provider_reference=str(escrow_txn["id"])
+        escrow_provider_reference=str(escrow_txn["id"]),
+        notes=notes_text
     )
     transaction.status = "settlement_pending"
     db.add(settlement_record)

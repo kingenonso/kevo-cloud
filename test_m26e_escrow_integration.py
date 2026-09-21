@@ -180,7 +180,15 @@ def test_create_fails_cleanly_if_escrow_create_raises(client, db_session, mock_e
     assert txn.status == "accepted"
 
 
-def test_create_fails_cleanly_if_agree_raises(client, db_session, mock_escrow):
+def test_create_falls_back_gracefully_if_agree_not_authorized(client, db_session, mock_escrow):
+    """
+    M26E follow-up (2026-09-21): Escrow.com's real sandbox rejects
+    auto-agree with a 403 until they grant KEVO's partner account
+    permission to act on customers' behalf (requested, pending). This
+    must not block settlement from proceeding - it should fall back to
+    capturing each unagreed party's own one-click Escrow.com link instead
+    of hard-failing the whole thing.
+    """
     seller = make_user(db_session, "1", role="seller")
     buyer = make_user(db_session, "2", role="buyer")
     admin = make_user(db_session, "3", account_type="admin")
@@ -189,6 +197,31 @@ def test_create_fails_cleanly_if_agree_raises(client, db_session, mock_escrow):
     mock_escrow["agree_as_customer"].side_effect = RuntimeError(
         "Escrow.com API error 403: Partner account not authorized to perform actions on behalf of customers"
     )
+    mock_escrow["get_transaction"].return_value = {
+        "parties": [
+            {"customer": buyer.email, "next_step": "https://www.escrow-sandbox.com/agree?tid=1&token=abc"},
+            {"customer": seller.email, "next_step": "https://www.escrow-sandbox.com/agree?tid=1&token=def"},
+        ]
+    }
+
+    resp = client.post("/settlement-records", headers=auth_headers(admin), params={"transaction_id": txn.id})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["escrow_provider_reference"] == "999999"
+    assert "Awaiting manual agreement on Escrow.com" in body["notes"]
+    assert buyer.email in body["notes"]
+    assert seller.email in body["notes"]
+    db_session.refresh(txn)
+    assert txn.status == "settlement_pending"
+
+
+def test_create_still_fails_cleanly_if_transaction_creation_itself_raises(client, db_session, mock_escrow):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    admin = make_user(db_session, "3", account_type="admin")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer)
+    mock_escrow["create_transaction"].side_effect = RuntimeError("Escrow.com API error 422: boom")
 
     resp = client.post("/settlement-records", headers=auth_headers(admin), params={"transaction_id": txn.id})
     assert resp.status_code == 502
