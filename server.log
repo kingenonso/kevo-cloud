@@ -1,0 +1,9 @@
+nohup: ignoring input
+INFO:     Started server process [313624]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:55258 - "POST /settlement-records?transaction_id=16 HTTP/1.1" 502 Bad Gateway
+INFO:     127.0.0.1:33342 - "GET /docs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33342 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54228 - "POST /webhooks/escrow HTTP/1.1" 200 OK

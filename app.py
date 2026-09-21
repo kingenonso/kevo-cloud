@@ -23,6 +23,7 @@ from models import Listing as ListingModel
 from models import User as UserModel
 from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection
 from models import Transaction
+import escrow_client
 app = FastAPI(title="KEVO API")
 
 # M28 (first slice) - serves the web app's login + dashboard shell as static
@@ -4419,15 +4420,60 @@ def create_settlement_record(
     existing = db.query(SettlementRecord).filter(SettlementRecord.transaction_id == transaction_id).first()
     if existing is not None:
         raise HTTPException(status_code=400, detail="A settlement record already exists for this transaction")
+    buyer = db.query(UserModel).filter(UserModel.id == transaction.buyer_id).first()
+    seller = db.query(UserModel).filter(UserModel.id == transaction.seller_id).first()
+    if buyer is None or seller is None:
+        raise HTTPException(status_code=400, detail="Transaction is missing a buyer or seller account")
+    try:
+        escrow_txn = escrow_client.create_transaction(
+            buyer_email=buyer.email,
+            seller_email=seller.email,
+            amount=float(transaction.agreed_price),
+            currency=transaction.settlement_currency,
+            description=f"KEVO transaction #{transaction.id}"
+        )
+        escrow_client.agree_as_customer(escrow_txn["id"], buyer.email)
+        escrow_client.agree_as_customer(escrow_txn["id"], seller.email)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not set up the escrow transaction: {exc}")
     settlement_record = SettlementRecord(
         transaction_id=transaction_id,
-        status="pending"
+        status="pending",
+        escrow_provider_reference=str(escrow_txn["id"])
     )
     transaction.status = "settlement_pending"
     db.add(settlement_record)
     db.commit()
     db.refresh(settlement_record)
     return settlement_record
+
+
+def _maybe_start_escrow_release_countdown(settlement_record, db):
+    """
+    M26E - once both funds_received and shares_confirmed_transferable are
+    true, tell Escrow.com the item has been shipped and received. That
+    starts their inspection-period countdown, which auto-releases funds
+    to the seller once it lapses - KEVO cannot trigger that final release
+    directly (Escrow.com restricts it to the buyer's own login), so this
+    countdown is what stands in for an instant release.
+    """
+    if not (settlement_record.funds_received and settlement_record.shares_confirmed_transferable):
+        return
+    if settlement_record.escrow_release_initiated:
+        return
+    if not settlement_record.escrow_provider_reference:
+        return
+    transaction = db.query(Transaction).filter(Transaction.id == settlement_record.transaction_id).first()
+    if transaction is None:
+        return
+    buyer = db.query(UserModel).filter(UserModel.id == transaction.buyer_id).first()
+    seller = db.query(UserModel).filter(UserModel.id == transaction.seller_id).first()
+    if buyer is None or seller is None:
+        return
+    escrow_client.mark_shipped(settlement_record.escrow_provider_reference, seller.email)
+    escrow_client.mark_received(settlement_record.escrow_provider_reference, buyer.email)
+    settlement_record.escrow_release_initiated = True
+    db.commit()
 
 
 @app.put("/settlement-records/{settlement_record_id}/confirm-funds-received")
@@ -4452,6 +4498,7 @@ def confirm_funds_received(
     if settlement_record.status == "pending":
         settlement_record.status = "in_progress"
     db.commit()
+    _maybe_start_escrow_release_countdown(settlement_record, db)
     db.refresh(settlement_record)
     return settlement_record
 
@@ -4475,6 +4522,7 @@ def confirm_shares_transferable(
     if settlement_record.status == "pending":
         settlement_record.status = "in_progress"
     db.commit()
+    _maybe_start_escrow_release_countdown(settlement_record, db)
     db.refresh(settlement_record)
     return settlement_record
 
@@ -4495,6 +4543,24 @@ def release_settlement_funds(
             status_code=400,
             detail="Cannot release funds until both funds_received and shares_confirmed_transferable are confirmed"
         )
+    # M26E - KEVO cannot force a release directly (Escrow.com restricts
+    # that action to the buyer's own login), so this checks whether
+    # Escrow.com has actually disbursed funds yet rather than marking it
+    # released on request. The normal path is the /webhooks/escrow
+    # endpoint flipping this automatically once the release countdown
+    # lapses; this endpoint is a manual way to sync KEVO with reality.
+    if settlement_record.escrow_provider_reference:
+        escrow_txn = escrow_client.get_transaction(settlement_record.escrow_provider_reference)
+        disbursed = any(
+            schedule_entry.get("status", {}).get("disbursed_to_beneficiary")
+            for item in escrow_txn.get("items", [])
+            for schedule_entry in item.get("schedule", [])
+        )
+        if not disbursed:
+            raise HTTPException(
+                status_code=400,
+                detail="Escrow.com has not disbursed funds yet - the release countdown is still in progress"
+            )
     settlement_record.funds_released = True
     settlement_record.funds_released_at = datetime.utcnow()
     settlement_record.status = "completed"
@@ -4504,6 +4570,56 @@ def release_settlement_funds(
     db.commit()
     db.refresh(settlement_record)
     return settlement_record
+
+
+@app.post("/webhooks/escrow")
+def escrow_webhook(payload: dict, db: Session = Depends(get_db)):
+    """
+    M26E - Escrow.com calls this directly, so there is no KEVO login to
+    check. Per Escrow.com's own guidance, the webhook body is never
+    trusted on its own: this re-fetches the real transaction from
+    Escrow.com and acts on what it actually shows, not on the payload's
+    claims - a forged POST to this URL can't flip anything by itself.
+    """
+    transaction_id = payload.get("transaction_id")
+    if transaction_id is None:
+        raise HTTPException(status_code=400, detail="Missing transaction_id")
+    settlement_record = db.query(SettlementRecord).filter(
+        SettlementRecord.escrow_provider_reference == str(transaction_id)
+    ).first()
+    if settlement_record is None:
+        return {"status": "ignored", "reason": "no matching settlement record"}
+    try:
+        escrow_txn = escrow_client.get_transaction(transaction_id)
+    except Exception:
+        return {"status": "ignored", "reason": "could not verify transaction with Escrow.com"}
+    payment_received = any(
+        schedule_entry.get("status", {}).get("payment_received")
+        for item in escrow_txn.get("items", [])
+        for schedule_entry in item.get("schedule", [])
+    )
+    disbursed = any(
+        schedule_entry.get("status", {}).get("disbursed_to_beneficiary")
+        for item in escrow_txn.get("items", [])
+        for schedule_entry in item.get("schedule", [])
+    )
+    if payment_received and not settlement_record.funds_received:
+        settlement_record.funds_received = True
+        settlement_record.funds_received_at = datetime.utcnow()
+        if settlement_record.status == "pending":
+            settlement_record.status = "in_progress"
+        db.commit()
+        _maybe_start_escrow_release_countdown(settlement_record, db)
+    if disbursed and not settlement_record.funds_released:
+        settlement_record.funds_released = True
+        settlement_record.funds_released_at = datetime.utcnow()
+        settlement_record.status = "completed"
+        transaction = db.query(Transaction).filter(Transaction.id == settlement_record.transaction_id).first()
+        if transaction is not None and transaction.status == "settlement_pending":
+            transaction.status = "completed"
+        db.commit()
+    db.refresh(settlement_record)
+    return {"status": "ok"}
 
 
 @app.get("/settlement-records")

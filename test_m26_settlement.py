@@ -28,6 +28,38 @@ from models import (
     SettlementRecord,
 )
 from app import app, get_db, hash_password, create_access_token
+from unittest.mock import patch
+
+
+@pytest.fixture(autouse=True)
+def mock_escrow_client():
+    """
+    M26E - none of these tests should ever make a real network call to
+    Escrow.com. Every escrow_client function is replaced with a fake that
+    returns a realistic-shaped response; tests that care about the
+    specifics of what was called can still inspect these mocks directly.
+    """
+    with patch("escrow_client.create_transaction") as mock_create, \
+         patch("escrow_client.agree_as_customer") as mock_agree, \
+         patch("escrow_client.mark_shipped") as mock_ship, \
+         patch("escrow_client.mark_received") as mock_receive, \
+         patch("escrow_client.get_transaction") as mock_get:
+        mock_create.return_value = {"id": 999999}
+        mock_agree.return_value = {"id": 999999}
+        mock_ship.return_value = {"id": 999999}
+        mock_receive.return_value = {"id": 999999}
+        mock_get.return_value = {
+            "items": [{"schedule": [{"status": {
+                "payment_received": False, "disbursed_to_beneficiary": False
+            }}]}]
+        }
+        yield {
+            "create_transaction": mock_create,
+            "agree_as_customer": mock_agree,
+            "mark_shipped": mock_ship,
+            "mark_received": mock_receive,
+            "get_transaction": mock_get,
+        }
 
 
 @pytest.fixture()
