@@ -474,6 +474,7 @@ class RofrRequest(Base):
     transferability_rule_id = Column(Integer, ForeignKey("transferability_rules.id"), nullable=False)
     status = Column(String(50), nullable=False, default="pending")
     response_notes = Column(String(1000), nullable=True)
+    escrow_release_initiated = Column(Boolean, nullable=False, default=False)
     responded_at = Column(DateTime, nullable=True)
     source_reference = Column(String(500), nullable=True)
 class SettlementRecord(Base):
@@ -508,6 +509,7 @@ class SettlementRecord(Base):
     funds_released = Column(Boolean, nullable=False, default=False)
     funds_released_at = Column(DateTime, nullable=True)
     notes = Column(String(1000), nullable=True)
+    escrow_release_initiated = Column(Boolean, nullable=False, default=False)
 
 
 class LoanRequest(Base):
@@ -535,6 +537,7 @@ class LoanRequest(Base):
     matched_at = Column(DateTime, nullable=True)
     closed_at = Column(DateTime, nullable=True)
     notes = Column(String(1000), nullable=True)
+    escrow_release_initiated = Column(Boolean, nullable=False, default=False)
 
 
 class OptionFundingReferral(Base):
@@ -561,6 +564,7 @@ class OptionFundingReferral(Base):
     holder_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     company = Column(String(255), nullable=False)
     notes = Column(String(1000), nullable=True)
+    escrow_release_initiated = Column(Boolean, nullable=False, default=False)
     status = Column(String(50), nullable=False, default="requested")
     referred_provider_name = Column(String(255), nullable=True)
     referred_at = Column(DateTime, nullable=True)
