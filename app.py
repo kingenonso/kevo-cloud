@@ -1931,6 +1931,57 @@ def get_investor_eligibility_record(
     }
 
 
+@app.put("/investor-eligibility/{eligibility_id}/verify")
+def verify_investor_eligibility(
+    eligibility_id: int,
+    status: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only an admin can verify investor eligibility records"
+        )
+
+    record = db.query(InvestorEligibility).filter(
+        InvestorEligibility.id == eligibility_id
+    ).first()
+
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Investor eligibility record not found"
+        )
+
+    if status not in ["verified", "rejected"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Status must be verified or rejected"
+        )
+
+    record.status = status
+
+    db.commit()
+    db.refresh(record)
+
+    return {
+        "message": "Investor eligibility verification updated",
+        "investor_eligibility": {
+            "id": record.id,
+            "buyer_id": record.buyer_id,
+            "investor_type": record.investor_type,
+            "classification": record.classification,
+            "status": record.status,
+            "verification_method": record.verification_method,
+            "evidence_reference": record.evidence_reference,
+            "effective_date": record.effective_date,
+            "review_date": record.review_date,
+            "jurisdiction": record.jurisdiction
+        }
+    }
+
+
 class EvidenceCreate(BaseModel):
     user_id: int
     listing_id: int | None = None
