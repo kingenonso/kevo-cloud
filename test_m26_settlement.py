@@ -210,6 +210,136 @@ def test_create_duplicate_400(client, db_session):
     assert resp.status_code == 400
 
 
+# --- Escrow creation failure never loses the attempt / never allows a
+# duplicate transaction on Escrow.com on retry ---
+
+def test_create_when_escrow_fails_persists_unconfirmed_record_502(client, db_session, mock_escrow_client):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    admin = make_user(db_session, "3", account_type="admin")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer, status="accepted")
+
+    mock_escrow_client["create_transaction"].side_effect = Exception("timed out waiting on Escrow.com")
+
+    resp = client.post("/settlement-records", headers=auth_headers(admin), params={"transaction_id": txn.id})
+    assert resp.status_code == 502
+
+    record = db_session.query(SettlementRecord).filter(SettlementRecord.transaction_id == txn.id).first()
+    assert record is not None
+    assert record.status == "escrow_creation_unconfirmed"
+    assert record.escrow_provider_reference is None
+
+    db_session.refresh(txn)
+    assert txn.status == "accepted"
+
+
+def test_create_retry_after_unconfirmed_failure_gets_409_not_a_duplicate(client, db_session, mock_escrow_client):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    admin = make_user(db_session, "3", account_type="admin")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer, status="accepted")
+
+    mock_escrow_client["create_transaction"].side_effect = Exception("timed out")
+    client.post("/settlement-records", headers=auth_headers(admin), params={"transaction_id": txn.id})
+
+    mock_escrow_client["create_transaction"].side_effect = None
+    mock_escrow_client["create_transaction"].return_value = {"id": 888888}
+    resp = client.post("/settlement-records", headers=auth_headers(admin), params={"transaction_id": txn.id})
+    assert resp.status_code == 409
+    mock_escrow_client["create_transaction"].assert_called_once()
+
+
+def test_resolve_unconfirmed_with_reference_completes_settlement(client, db_session, mock_escrow_client):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    admin = make_user(db_session, "3", account_type="admin")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer, status="accepted")
+
+    mock_escrow_client["create_transaction"].side_effect = Exception("timed out")
+    client.post("/settlement-records", headers=auth_headers(admin), params={"transaction_id": txn.id})
+    record = db_session.query(SettlementRecord).filter(SettlementRecord.transaction_id == txn.id).first()
+
+    resp = client.put(
+        f"/settlement-records/{record.id}/resolve-unconfirmed-creation",
+        headers=auth_headers(admin),
+        params={"escrow_provider_reference": "777777"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "pending"
+    assert body["escrow_provider_reference"] == "777777"
+
+    db_session.refresh(txn)
+    assert txn.status == "settlement_pending"
+
+
+def test_resolve_unconfirmed_without_reference_marks_abandoned_and_allows_clean_retry(client, db_session, mock_escrow_client):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    admin = make_user(db_session, "3", account_type="admin")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer, status="accepted")
+
+    mock_escrow_client["create_transaction"].side_effect = Exception("timed out")
+    client.post("/settlement-records", headers=auth_headers(admin), params={"transaction_id": txn.id})
+    record = db_session.query(SettlementRecord).filter(SettlementRecord.transaction_id == txn.id).first()
+
+    resolve_resp = client.put(
+        f"/settlement-records/{record.id}/resolve-unconfirmed-creation",
+        headers=auth_headers(admin),
+    )
+    assert resolve_resp.status_code == 200
+    assert resolve_resp.json()["status"] == "escrow_creation_abandoned"
+
+    mock_escrow_client["create_transaction"].side_effect = None
+    mock_escrow_client["create_transaction"].return_value = {"id": 555555}
+    retry_resp = client.post("/settlement-records", headers=auth_headers(admin), params={"transaction_id": txn.id})
+    assert retry_resp.status_code == 200
+    body = retry_resp.json()
+    assert body["id"] == record.id
+    assert body["status"] == "pending"
+    assert body["escrow_provider_reference"] == "555555"
+
+    assert db_session.query(SettlementRecord).filter(SettlementRecord.transaction_id == txn.id).count() == 1
+
+
+def test_resolve_unconfirmed_non_admin_403(client, db_session, mock_escrow_client):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    admin = make_user(db_session, "3", account_type="admin")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer, status="accepted")
+
+    mock_escrow_client["create_transaction"].side_effect = Exception("timed out")
+    client.post("/settlement-records", headers=auth_headers(admin), params={"transaction_id": txn.id})
+    record = db_session.query(SettlementRecord).filter(SettlementRecord.transaction_id == txn.id).first()
+
+    resp = client.put(
+        f"/settlement-records/{record.id}/resolve-unconfirmed-creation",
+        headers=auth_headers(buyer),
+    )
+    assert resp.status_code == 403
+
+
+def test_resolve_unconfirmed_wrong_state_400(client, db_session):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    admin = make_user(db_session, "3", account_type="admin")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer, status="settlement_pending")
+    record = make_settlement_record(db_session, txn, status="pending")
+
+    resp = client.put(
+        f"/settlement-records/{record.id}/resolve-unconfirmed-creation",
+        headers=auth_headers(admin),
+        params={"escrow_provider_reference": "123"},
+    )
+    assert resp.status_code == 400
+
+
 # --- PUT /settlement-records/{id}/confirm-funds-received ---
 
 def test_admin_can_confirm_funds_received(client, db_session):
