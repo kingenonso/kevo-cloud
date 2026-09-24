@@ -7049,3 +7049,182 @@ def get_seller_financing_collateral(agreement_id: int, db: Session = Depends(get
     agreement = _get_seller_financing_agreement_or_404(agreement_id, db)
     _require_seller_financing_party_or_admin(agreement, current_user, db)
     return db.query(SellerFinancingCollateral).filter(SellerFinancingCollateral.agreement_id == agreement_id).all()
+
+
+@app.get("/seller-financing-agreements/{agreement_id}/summary")
+def get_seller_financing_summary(agreement_id: int, db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
+    agreement = _get_seller_financing_agreement_or_404(agreement_id, db)
+    transaction = _require_seller_financing_party_or_admin(agreement, current_user, db)
+
+    payments = db.query(SellerFinancingPayment).filter(
+        SellerFinancingPayment.agreement_id == agreement_id
+    ).order_by(SellerFinancingPayment.installment_number).all()
+    today = date.today()
+
+    paid = [p for p in payments if p.status == "paid"]
+    overdue = [p for p in payments if p.status in ("pending", "late") and p.due_date < today]
+    upcoming = [p for p in payments if p.status == "pending" and p.due_date >= today]
+    outstanding_total = sum(float(p.amount_due) for p in payments if p.status in ("pending", "late"))
+    total_paid = sum(float(p.paid_amount) for p in paid if p.paid_amount is not None)
+
+    reserve = db.query(SellerFinancingReserve).filter(SellerFinancingReserve.agreement_id == agreement_id).first()
+    collateral_items = db.query(SellerFinancingCollateral).filter(SellerFinancingCollateral.agreement_id == agreement_id).all()
+    buyer = db.query(UserModel).filter(UserModel.id == transaction.buyer_id).first()
+
+    return {
+        "agreement_id": agreement.id,
+        "agreement_status": agreement.status,
+        "restricts_transfer_until_paid": agreement.restricts_transfer_until_paid,
+        "payments_total": len(payments),
+        "payments_paid": len(paid),
+        "payments_upcoming": len(upcoming),
+        "payments_overdue": len(overdue),
+        "outstanding_amount": round(outstanding_total, 2),
+        "total_paid": round(total_paid, 2),
+        "next_payment_due_date": upcoming[0].due_date.isoformat() if upcoming else None,
+        "reserve": {
+            "required_amount": float(reserve.required_amount),
+            "status": reserve.status,
+        } if reserve is not None else None,
+        "collateral": [
+            {
+                "id": c.id,
+                "description": c.description,
+                "collateral_type": c.collateral_type,
+                "status": c.status,
+                "legal_review_status": c.legal_review_status,
+            }
+            for c in collateral_items
+        ],
+        "buyer_account_blocked": buyer.seller_financing_blocked if buyer else None,
+    }
+
+
+def run_seller_financing_reminder_scan(db):
+    """
+    Seller Financing Protection System - automatic payment reminders
+    (2026-09-24). Scans for payments due soon (not yet reminded) and
+    payments overdue (not yet reminded), sends one email each via the
+    existing Mailgun sandbox client, and marks the reminder sent so it
+    never fires twice for the same payment. Never assesses a penalty,
+    never changes an amount, never auto-declares default - it only
+    surfaces facts and notifies people. An overdue reminder also notifies
+    the seller (not just the buyer) since that directly feeds the
+    accountability the default workflow exists for. A failed send (e.g.
+    the sandbox email provider isn't configured) is caught per-payment
+    and logged so it never blocks the rest of the scan.
+    """
+    today = date.today()
+    upcoming_window_end = today + timedelta(days=3)
+    counts = {"upcoming_sent": 0, "overdue_sent": 0, "failed": 0}
+
+    upcoming_due = db.query(SellerFinancingPayment).filter(
+        SellerFinancingPayment.status == "pending",
+        SellerFinancingPayment.due_date >= today,
+        SellerFinancingPayment.due_date <= upcoming_window_end,
+        SellerFinancingPayment.reminder_upcoming_sent_at.is_(None),
+    ).all()
+
+    for payment in upcoming_due:
+        agreement = db.query(SellerFinancingAgreement).filter(SellerFinancingAgreement.id == payment.agreement_id).first()
+        if agreement is None or agreement.status != "active":
+            continue
+        transaction = db.query(Transaction).filter(Transaction.id == agreement.transaction_id).first()
+        buyer = db.query(UserModel).filter(UserModel.id == transaction.buyer_id).first() if transaction else None
+        if buyer is None:
+            continue
+        try:
+            email_client.send_email(
+                buyer.email,
+                "Upcoming seller financing payment due",
+                f"Installment #{payment.installment_number} of ${payment.amount_due} is due on {payment.due_date.isoformat()}.",
+            )
+            payment.reminder_upcoming_sent_at = datetime.utcnow()
+            counts["upcoming_sent"] += 1
+        except Exception as exc:
+            counts["failed"] += 1
+
+    overdue_unreminded = db.query(SellerFinancingPayment).filter(
+        SellerFinancingPayment.status.in_(["pending", "late"]),
+        SellerFinancingPayment.due_date < today,
+        SellerFinancingPayment.reminder_overdue_sent_at.is_(None),
+    ).all()
+
+    for payment in overdue_unreminded:
+        agreement = db.query(SellerFinancingAgreement).filter(SellerFinancingAgreement.id == payment.agreement_id).first()
+        if agreement is None or agreement.status != "active":
+            continue
+        transaction = db.query(Transaction).filter(Transaction.id == agreement.transaction_id).first()
+        if transaction is None:
+            continue
+        buyer = db.query(UserModel).filter(UserModel.id == transaction.buyer_id).first()
+        seller = db.query(UserModel).filter(UserModel.id == transaction.seller_id).first()
+        if buyer is None:
+            continue
+        try:
+            email_client.send_email(
+                buyer.email,
+                "Seller financing payment overdue",
+                f"Installment #{payment.installment_number} of ${payment.amount_due} was due on {payment.due_date.isoformat()} and has not been confirmed as paid.",
+            )
+            if seller is not None:
+                email_client.send_email(
+                    seller.email,
+                    "Buyer payment overdue on your seller financing agreement",
+                    f"Installment #{payment.installment_number} of ${payment.amount_due} from your buyer was due on {payment.due_date.isoformat()} and has not been confirmed as paid.",
+                )
+            if payment.status == "pending":
+                payment.status = "late"
+            payment.reminder_overdue_sent_at = datetime.utcnow()
+            counts["overdue_sent"] += 1
+        except Exception as exc:
+            counts["failed"] += 1
+
+    db.commit()
+    return counts
+
+
+@app.post("/seller-financing-agreements/reminders/run")
+def run_seller_financing_reminders_endpoint(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can manually trigger the reminder scan")
+    return run_seller_financing_reminder_scan(db)
+
+
+# In-process scheduler (APScheduler) rather than Celery/Redis - KEVO runs
+# as a single uvicorn worker with no message broker, and this needs
+# nothing heavier than "run a function every few hours in this process."
+# A future multi-worker deployment would move this to a dedicated worker
+# process or an external cron hitting the endpoint above instead of
+# running it here in every worker.
+_seller_financing_scheduler = BackgroundScheduler()
+
+
+def _seller_financing_reminder_job():
+    db = SessionLocal()
+    try:
+        run_seller_financing_reminder_scan(db)
+    finally:
+        db.close()
+
+
+@app.on_event("startup")
+def _start_seller_financing_reminder_scheduler():
+    if not _seller_financing_scheduler.running:
+        _seller_financing_scheduler.add_job(
+            _seller_financing_reminder_job,
+            "interval",
+            hours=6,
+            id="seller_financing_reminders",
+            replace_existing=True,
+        )
+        _seller_financing_scheduler.start()
+
+
+@app.on_event("shutdown")
+def _stop_seller_financing_reminder_scheduler():
+    if _seller_financing_scheduler.running:
+        _seller_financing_scheduler.shutdown(wait=False)
