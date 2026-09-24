@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KEVO — Evidence</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#0a0e17] min-h-screen text-slate-200 font-sans">
+
+  <header class="border-b border-slate-800 px-6 py-4 space-y-3">
+    <div class="flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="text-lg font-semibold tracking-widest uppercase text-white">KEVO</div>
+      <div class="h-4 w-px bg-slate-700"></div>
+      <div class="text-xs text-slate-500 uppercase tracking-wide">Evidence</div>
+    </div>
+    <div class="flex items-center gap-4">
+      <span id="user-name" class="text-sm text-slate-400"></span>
+      <button id="logout-btn"
+        class="text-xs uppercase tracking-wide text-slate-500 hover:text-white border border-slate-700 hover:border-slate-500 px-3 py-1.5 transition-colors">
+        Log Out
+      </button>
+    </div>
+    </div>
+    <nav class="flex items-center gap-x-6 gap-y-2 flex-wrap">
+      <a href="/app/dashboard.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Dashboard</a>
+      <a href="/app/listings.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">My Listings</a>
+      <a href="/app/browse.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Browse</a>
+      <a href="/app/deal-alerts.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Deal Alerts</a>
+      <a href="/app/market.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Market Intel</a>
+      <a href="/app/kyc.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">KYC / AML</a>
+      <a href="/app/eligibility.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Eligibility</a>
+      <a href="/app/evidence.html" class="text-xs uppercase tracking-wide text-white">Evidence</a>
+      <a href="/app/transactions.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Transactions</a>
+      <a href="/app/rofr.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">ROFR</a>
+      <a href="/app/settlement.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Settlement</a>
+      <a href="/app/lending.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Lending</a>
+      <a href="/app/funding.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Funding</a>
+      <a href="/app/ledger.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Ledger</a>
+      <a href="/app/tender-offer.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Tender Offer</a>
+      <a href="/app/account.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Account</a>
+    </nav>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-6 py-10 space-y-10">
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Submit Evidence</div>
+      <div class="text-xs text-slate-600 mb-4">
+        Attach supporting evidence to a listing, transaction, or ownership record — or submit it on its own.
+        An admin reviews every submission and marks it verified or rejected.
+      </div>
+      <form id="evidence-form" class="border border-slate-800 bg-[#0d1220] p-6 space-y-4">
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="evidence-type">Evidence Type</label>
+            <input id="evidence-type" type="text" required placeholder="e.g. cap table, signed agreement"
+              class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="source-reference">Source Reference (optional)</label>
+            <input id="source-reference" type="text" placeholder="e.g. issuer transfer agent"
+              class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="description">Description</label>
+          <textarea id="description" required rows="3" placeholder="What this evidence shows and why it's relevant"
+            class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500"></textarea>
+        </div>
+
+        <div class="grid grid-cols-3 gap-4">
+          <div>
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="listing-id">Listing ID (optional)</label>
+            <input id="listing-id" type="number" min="1"
+              class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="transaction-id">Transaction ID (optional)</label>
+            <input id="transaction-id" type="number" min="1"
+              class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="ownership-record-id">Ownership Record ID (optional)</label>
+            <input id="ownership-record-id" type="number" min="1"
+              class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="file-reference">File Reference (optional)</label>
+            <input id="file-reference" type="text" placeholder="a URL or storage path to the file"
+              class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+          </div>
+          <div>
+            <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="file-hash">File Hash (required if File Reference is set)</label>
+            <input id="file-hash" type="text" placeholder="SHA-256 hash of the file"
+              class="w-full bg-black/30 border border-slate-700 text-white text-sm px-3 py-2 focus:outline-none focus:border-blue-500">
+          </div>
+        </div>
+
+        <div id="form-error" class="hidden text-sm text-red-400 border border-red-900 bg-red-950/40 px-3 py-2"></div>
+        <div id="form-success" class="hidden text-sm text-emerald-400 border border-emerald-900 bg-emerald-950/40 px-3 py-2"></div>
+
+        <button type="submit" id="submit-btn"
+          class="bg-blue-600 hover:bg-blue-500 text-white text-sm uppercase tracking-wide px-4 py-2 transition-colors">
+          Submit Evidence
+        </button>
+      </form>
+    </section>
+
+    <section>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Evidence Records</div>
+      <div class="border border-slate-800 bg-[#0d1220]">
+        <div class="grid grid-cols-7 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
+          <div>ID</div>
+          <div>Type</div>
+          <div class="col-span-2">Description</div>
+          <div>Linked To</div>
+          <div>Status</div>
+          <div>Action</div>
+        </div>
+        <div id="evidence-rows"></div>
+        <div id="evidence-empty" class="px-6 py-6 text-sm text-slate-500 hidden">No evidence records yet.</div>
+        <div id="evidence-loading" class="px-6 py-6 text-sm text-slate-500">Loading evidence...</div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    const token = localStorage.getItem("kevo_token");
+    if (!token) {
+      window.location.href = "/app/";
+    }
+
+    let isAdmin = false;
+    let myUserId = null;
+
+    function escapeHtml(text) {
+      const div = document.createElement("div");
+      div.textContent = text == null ? "" : String(text);
+      return div.innerHTML;
+    }
+
+    function statusBadge(status) {
+      if (status === "verified") {
+        return "<span class=\"inline-block text-xs uppercase tracking-wide px-2 py-1 border text-emerald-400 border-emerald-900 bg-emerald-950/40\">Verified</span>";
+      }
+      if (status === "rejected") {
+        return "<span class=\"inline-block text-xs uppercase tracking-wide px-2 py-1 border text-red-400 border-red-900 bg-red-950/40\">Rejected</span>";
+      }
+      return "<span class=\"inline-block text-xs uppercase tracking-wide px-2 py-1 border text-amber-400 border-amber-900 bg-amber-950/40\">Pending</span>";
+    }
+
+    function linkedToText(record) {
+      const parts = [];
+      if (record.listing_id != null) parts.push("Listing #" + record.listing_id);
+      if (record.transaction_id != null) parts.push("Transaction #" + record.transaction_id);
+      if (record.ownership_record_id != null) parts.push("Ownership #" + record.ownership_record_id);
+      return parts.length > 0 ? parts.join(", ") : "—";
+    }
+
+    async function loadMe() {
+      const response = await fetch("/me", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+      const user = await response.json();
+      document.getElementById("user-name").textContent = user.name;
+      isAdmin = user.account_type === "admin";
+      myUserId = user.id;
+      loadEvidence();
+    }
+
+    async function loadEvidence() {
+      const rows = document.getElementById("evidence-rows");
+      const empty = document.getElementById("evidence-empty");
+      const loading = document.getElementById("evidence-loading");
+
+      const response = await fetch("/evidence", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+      if (!response.ok) {
+        loading.textContent = "Could not load evidence records.";
+        return;
+      }
+
+      const records = await response.json();
+      loading.classList.add("hidden");
+      rows.innerHTML = "";
+
+      if (records.length === 0) {
+        empty.classList.remove("hidden");
+        return;
+      }
+      empty.classList.add("hidden");
+
+      records.forEach(function (record) {
+        const row = document.createElement("div");
+        row.className = "grid grid-cols-7 gap-4 px-6 py-3 border-b border-slate-800 last:border-b-0 text-sm items-center";
+
+        const canReview = isAdmin && record.verification_status !== "verified" && record.verification_status !== "rejected";
+        const actionHtml = canReview
+          ? "<div class=\"flex gap-2\">" +
+              "<button data-evidence-id=\"" + record.id + "\" data-status=\"verified\" class=\"review-btn text-xs uppercase tracking-wide text-emerald-400 hover:text-emerald-300 border border-emerald-900 hover:border-emerald-700 px-2 py-1 transition-colors\">Verify</button>" +
+              "<button data-evidence-id=\"" + record.id + "\" data-status=\"rejected\" class=\"review-btn text-xs uppercase tracking-wide text-red-400 hover:text-red-300 border border-red-900 hover:border-red-700 px-2 py-1 transition-colors\">Reject</button>" +
+            "</div>"
+          : "<span class=\"text-slate-600\">—</span>";
+
+        row.innerHTML =
+          "<div class=\"font-mono\">" + record.id + "</div>" +
+          "<div>" + escapeHtml(record.evidence_type) + "</div>" +
+          "<div class=\"col-span-2 text-slate-400\">" + escapeHtml(record.description) + "</div>" +
+          "<div class=\"text-slate-400\">" + linkedToText(record) + "</div>" +
+          "<div>" + statusBadge(record.verification_status) + "</div>" +
+          "<div>" + actionHtml + "</div>";
+        rows.appendChild(row);
+      });
+
+      document.querySelectorAll(".review-btn").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          reviewEvidence(parseInt(btn.getAttribute("data-evidence-id"), 10), btn.getAttribute("data-status"));
+        });
+      });
+    }
+
+    async function reviewEvidence(evidenceId, status) {
+      const response = await fetch("/evidence/" + evidenceId + "/verify?status=" + status, {
+        method: "PUT",
+        headers: { "Authorization": "Bearer " + token }
+      });
+      if (response.status === 401) {
+        localStorage.removeItem("kevo_token");
+        window.location.href = "/app/";
+        return;
+      }
+      if (!response.ok) {
+        return;
+      }
+      loadEvidence();
+    }
+
+    const form = document.getElementById("evidence-form");
+    const formError = document.getElementById("form-error");
+    const formSuccess = document.getElementById("form-success");
+    const submitBtn = document.getElementById("submit-btn");
+
+    function showFormError(message) {
+      formError.textContent = message;
+      formError.classList.remove("hidden");
+      formSuccess.classList.add("hidden");
+    }
+
+    function showFormSuccess(message) {
+      formSuccess.textContent = message;
+      formSuccess.classList.remove("hidden");
+      formError.classList.add("hidden");
+    }
+
+    function fieldToInt(id) {
+      const value = document.getElementById(id).value;
+      return value === "" ? null : parseInt(value, 10);
+    }
+
+    function fieldToStringOrNull(id) {
+      const value = document.getElementById(id).value.trim();
+      return value === "" ? null : value;
+    }
+
+    form.addEventListener("submit", async function (event) {
+      event.preventDefault();
+      formError.classList.add("hidden");
+      formSuccess.classList.add("hidden");
+
+      const fileReference = fieldToStringOrNull("file-reference");
+      const fileHash = fieldToStringOrNull("file-hash");
+
+      if (fileReference && !fileHash) {
+        showFormError("File Hash is required when File Reference is provided.");
+        return;
+      }
+
+      const body = {
+        user_id: myUserId,
+        listing_id: fieldToInt("listing-id"),
+        transaction_id: fieldToInt("transaction-id"),
+        ownership_record_id: fieldToInt("ownership-record-id"),
+        evidence_type: document.getElementById("evidence-type").value.trim(),
+        description: document.getElementById("description").value.trim(),
+        file_reference: fileReference,
+        file_hash: fileHash,
+        source_reference: fieldToStringOrNull("source-reference")
+      };
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Submitting...";
+
+      try {
+        const response = await fetch("/evidence", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + token
+          },
+          body: JSON.stringify(body)
+        });
+
+        if (response.status === 401) {
+          localStorage.removeItem("kevo_token");
+          window.location.href = "/app/";
+          return;
+        }
+
+        if (response.ok) {
+          showFormSuccess("Evidence submitted.");
+          form.reset();
+          loadEvidence();
+        } else {
+          const data = await response.json().catch(function () { return {}; });
+          showFormError(data.detail || "Something went wrong. Please try again.");
+        }
+      } catch (err) {
+        showFormError("Could not reach the server. Please check your connection.");
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Submit Evidence";
+      }
+    });
+
+    document.getElementById("logout-btn").addEventListener("click", function () {
+      localStorage.removeItem("kevo_token");
+      window.location.href = "/app/";
+    });
+
+    loadMe();
+  </script>
+
+</body>
+</html>
