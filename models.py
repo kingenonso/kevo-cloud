@@ -19,6 +19,7 @@ class User(Base):
     account_type = Column(String(50), nullable=False, default="participant")
     failed_login_attempts = Column(Integer, nullable=False, default=0)
     locked_until = Column(DateTime, nullable=True)
+    tokens_valid_since = Column(DateTime, nullable=True)
 
     listings = relationship("Listing", back_populates="seller")
 
@@ -701,4 +702,29 @@ class DealAlert(Base):
     buyer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     is_read = Column(Boolean, nullable=False, default=False)
     read_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False)
+
+
+
+class AuditLogEntry(Base):
+    """
+    Full-gap-closure pass (Batch B, group 3 item 8), 2026-09-24 - M22's
+    security audit explicitly deferred this as its own real design
+    decision, not something to fold quietly into a "quick wins" pass.
+    Records a curated set of security/compliance-relevant events - never
+    an attempt to log everything the platform does. actor_user_id is
+    nullable because some events (a failed login against a real email
+    that still doesn't verify) are worth recording even when there is no
+    fully-authenticated actor for the request itself. Admin-only reads,
+    via GET /audit-log. Append-only by convention - nothing in app.py
+    ever updates or deletes a row here.
+    """
+    __tablename__ = "audit_log_entries"
+
+    id = Column(Integer, primary_key=True)
+    actor_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    action = Column(String(100), nullable=False)
+    target_type = Column(String(50), nullable=True)
+    target_id = Column(Integer, nullable=True)
+    detail = Column(String(1000), nullable=True)
     created_at = Column(DateTime, nullable=False)

@@ -2,9 +2,10 @@ import bisect
 import os
 import statistics
 from collections import defaultdict
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, File, UploadFile
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -22,7 +23,7 @@ import secrets
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection, DealAlert, PasswordResetToken
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection, DealAlert, PasswordResetToken, AuditLogEntry
 from models import Transaction
 import escrow_client
 import email_client
@@ -792,9 +793,28 @@ def verify_password(plain_password, hashed_password):
 
 
 def create_access_token(user_id):
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    payload = {"sub": str(user_id), "exp": expire}
+    now = datetime.utcnow()
+    expire = now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    payload = {"sub": str(user_id), "iat": now, "exp": expire}
     return jwt.encode(payload, SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+
+def log_audit_event(db, actor_user_id, action, target_type=None, target_id=None, detail=None):
+    """
+    Full-gap-closure pass (Batch B, group 3 item 8), 2026-09-24 - adds a
+    row to the pending session without committing it itself, so callers
+    fold the audit entry into whatever commit their own endpoint already
+    makes, rather than a second round-trip.
+    """
+    entry = AuditLogEntry(
+        actor_user_id=actor_user_id,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        detail=detail,
+        created_at=datetime.utcnow()
+    )
+    db.add(entry)
 
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
@@ -807,6 +827,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[JWT_ALGORITHM])
         user_id = payload.get("sub")
+        issued_at = payload.get("iat")
         if user_id is None:
             raise credentials_exception
     except jwt.PyJWTError:
@@ -815,6 +836,14 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     user = db.query(UserModel).filter(UserModel.id == int(user_id)).first()
     if user is None:
         raise credentials_exception
+
+    if user.tokens_valid_since is not None:
+        if issued_at is None or datetime.utcfromtimestamp(issued_at) < user.tokens_valid_since:
+            raise HTTPException(
+                status_code=401,
+                detail="Token has been revoked. Please log in again.",
+                headers={"WWW-Authenticate": "Bearer"}
+            )
 
     return user
 
@@ -827,12 +856,16 @@ def login(request: Request, credentials: LoginRequest, db: Session = Depends(get
     ).first()
 
     if user is None or user.hashed_password is None:
+        log_audit_event(db, None, "login_failed_unknown_email", detail=credentials.email)
+        db.commit()
         raise HTTPException(
             status_code=401,
             detail="Incorrect email or password"
         )
 
     if user.locked_until is not None and user.locked_until > datetime.utcnow():
+        log_audit_event(db, user.id, "login_blocked_lockout")
+        db.commit()
         raise HTTPException(
             status_code=423,
             detail="Account temporarily locked due to repeated failed login attempts. Try again later."
@@ -843,6 +876,7 @@ def login(request: Request, credentials: LoginRequest, db: Session = Depends(get
         if user.failed_login_attempts >= MAX_FAILED_LOGIN_ATTEMPTS:
             user.locked_until = datetime.utcnow() + timedelta(minutes=LOCKOUT_DURATION_MINUTES)
             user.failed_login_attempts = 0
+        log_audit_event(db, user.id, "login_failed_wrong_password")
         db.commit()
         raise HTTPException(
             status_code=401,
@@ -855,10 +889,60 @@ def login(request: Request, credentials: LoginRequest, db: Session = Depends(get
 
     access_token = create_access_token(user.id)
 
+    log_audit_event(db, user.id, "login_success")
+    db.commit()
+
     return {
         "access_token": access_token,
         "token_type": "bearer"
     }
+
+
+@app.post("/users/me/revoke-tokens")
+def revoke_my_tokens(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Full-gap-closure pass (Batch B, group 3 item 8), 2026-09-24 - real
+    "log out everywhere": any token issued before this moment is
+    rejected on its next use, including the token used to make this
+    very call (this request was already authenticated before the
+    revocation point was set).
+    """
+    current_user.tokens_valid_since = datetime.utcnow().replace(microsecond=0)
+    log_audit_event(db, current_user.id, "tokens_revoked", target_type="user", target_id=current_user.id)
+    db.commit()
+
+    return {"message": "All tokens issued before this moment have been revoked. Please log in again."}
+
+
+@app.get("/audit-log")
+def get_audit_log(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Full-gap-closure pass (Batch B, group 3 item 8), 2026-09-24 - admin-only
+    read of the curated security/compliance audit trail, newest first.
+    """
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can view the audit log")
+
+    entries = db.query(AuditLogEntry).order_by(AuditLogEntry.created_at.desc()).all()
+
+    return [
+        {
+            "id": e.id,
+            "actor_user_id": e.actor_user_id,
+            "action": e.action,
+            "target_type": e.target_type,
+            "target_id": e.target_id,
+            "detail": e.detail,
+            "created_at": e.created_at.isoformat()
+        }
+        for e in entries
+    ]
 
 
 @app.post("/users/{user_id}/set-password")
@@ -903,6 +987,8 @@ def change_password(
         )
 
     current_user.hashed_password = hash_password(request.new_password)
+    current_user.tokens_valid_since = datetime.utcnow().replace(microsecond=0)
+    log_audit_event(db, current_user.id, "password_changed", target_type="user", target_id=current_user.id)
     db.commit()
 
     return {"message": "Password changed successfully"}
@@ -975,7 +1061,9 @@ def reset_password(request: ResetPasswordRequest, db: Session = Depends(get_db))
         raise HTTPException(status_code=400, detail="Invalid or expired token")
 
     user.hashed_password = hash_password(request.new_password)
+    user.tokens_valid_since = datetime.utcnow().replace(microsecond=0)
     reset_token.used_at = datetime.utcnow()
+    log_audit_event(db, user.id, "password_reset_completed", target_type="user", target_id=user.id)
     db.commit()
 
     return {"message": "Password reset successfully"}
@@ -1213,8 +1301,10 @@ def update_kyc_status(
             detail="Status must be verified or rejected"
         )
 
+    old_status = user.kyc_status
     user.kyc_status = status
 
+    log_audit_event(db, current_user.id, "kyc_status_changed", target_type="user", target_id=user.id, detail=f"{old_status} -> {status}")
     db.commit()
     db.refresh(user)
 
@@ -2232,6 +2322,7 @@ def verify_evidence(
 
     evidence.verification_status = status
 
+    log_audit_event(db, current_user.id, "evidence_" + status, target_type="evidence", target_id=evidence.id)
     db.commit()
     db.refresh(evidence)
 
@@ -2320,6 +2411,122 @@ def get_evidence_record(
             "source_reference": record.source_reference
         }
     }
+
+
+# ---------------------------------------------------------------------------
+# Full-gap-closure pass (Batch B, group 3 item 7), 2026-09-24 - M23's
+# file_reference/file_hash were caller-typed strings the platform never
+# verified: a client could claim any string as the "hash" of a file it
+# never actually sent. These two endpoints replace that trust with a real
+# local-disk upload: the server reads the actual bytes, computes the real
+# SHA-256 hash itself, writes the file under UPLOAD_DIR, and only then
+# updates file_reference (to this file's own download URL) and file_hash
+# (the real computed hash) on the Evidence row - superseding whatever was
+# passed to POST /evidence originally, if anything.
+# ---------------------------------------------------------------------------
+
+UPLOAD_DIR = "uploads/evidence"
+MAX_EVIDENCE_UPLOAD_BYTES = 20 * 1024 * 1024
+
+
+@app.post("/evidence/{evidence_id}/upload-file")
+async def upload_evidence_file(
+    evidence_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    evidence = db.query(Evidence).filter(Evidence.id == evidence_id).first()
+
+    if evidence is None:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+
+    is_admin = current_user.account_type == "admin"
+    if not is_admin and current_user.id != evidence.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only upload a file to your own evidence"
+        )
+
+    if evidence.verification_status == "verified":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot replace the file on evidence that has already been verified"
+        )
+
+    contents = await file.read()
+
+    if len(contents) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    if len(contents) > MAX_EVIDENCE_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="File exceeds the 20MB upload limit")
+
+    file_hash = hashlib.sha256(contents).hexdigest()
+
+    original_name = file.filename or "upload"
+    _, ext = os.path.splitext(original_name)
+    safe_ext = "".join(c for c in ext if c.isalnum() or c == ".")[:10]
+
+    evidence_dir = os.path.join(UPLOAD_DIR, str(evidence_id))
+    os.makedirs(evidence_dir, exist_ok=True)
+    stored_path = os.path.join(evidence_dir, file_hash + safe_ext)
+
+    with open(stored_path, "wb") as out_file:
+        out_file.write(contents)
+
+    evidence.file_reference = "/evidence/" + str(evidence_id) + "/file"
+    evidence.file_hash = file_hash
+    db.commit()
+    db.refresh(evidence)
+
+    return {
+        "message": "File uploaded",
+        "evidence": {
+            "id": evidence.id,
+            "user_id": evidence.user_id,
+            "listing_id": evidence.listing_id,
+            "transaction_id": evidence.transaction_id,
+            "ownership_record_id": evidence.ownership_record_id,
+            "evidence_type": evidence.evidence_type,
+            "description": evidence.description,
+            "file_reference": evidence.file_reference,
+            "file_hash": evidence.file_hash,
+            "verification_status": evidence.verification_status,
+            "source_reference": evidence.source_reference
+        }
+    }
+
+
+@app.get("/evidence/{evidence_id}/file")
+def download_evidence_file(
+    evidence_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    evidence = db.query(Evidence).filter(Evidence.id == evidence_id).first()
+
+    if evidence is None:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+
+    if current_user.account_type != "admin" and current_user.id != evidence.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only view your own evidence"
+        )
+
+    if not evidence.file_hash:
+        raise HTTPException(status_code=404, detail="No file has been uploaded for this evidence")
+
+    evidence_dir = os.path.join(UPLOAD_DIR, str(evidence_id))
+    stored_files = os.listdir(evidence_dir) if os.path.isdir(evidence_dir) else []
+    matching = [f for f in stored_files if f.startswith(evidence.file_hash)]
+
+    if not matching:
+        raise HTTPException(status_code=404, detail="No file has been uploaded for this evidence")
+
+    stored_path = os.path.join(evidence_dir, matching[0])
+    return FileResponse(stored_path, filename=matching[0])
 
 
 @app.post("/kyc-facts")
@@ -2593,6 +2800,7 @@ def update_compliance_rule(
     for field, value in update_data.items():
         setattr(rule, field, value)
 
+    log_audit_event(db, current_user.id, "compliance_rule_updated", target_type="compliance_rule", target_id=rule.id, detail=", ".join(update_data.keys()))
     db.commit()
     db.refresh(rule)
 
