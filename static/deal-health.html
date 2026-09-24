@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KEVO — Deal Room</title>
+<title>KEVO — Deal Health</title>
 <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-[#0a0e17] min-h-screen text-slate-200 font-sans">
@@ -13,7 +13,7 @@
     <div class="flex items-center gap-3">
       <div class="text-lg font-semibold tracking-widest uppercase text-white">KEVO</div>
       <div class="h-4 w-px bg-slate-700"></div>
-      <div class="text-xs text-slate-500 uppercase tracking-wide">Deal Room</div>
+      <div class="text-xs text-slate-500 uppercase tracking-wide">Deal Health</div>
     </div>
     <div class="flex items-center gap-4">
       <span id="user-name" class="text-sm text-slate-400"></span>
@@ -33,7 +33,7 @@
       <a href="/app/eligibility.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Eligibility</a>
       <a href="/app/evidence.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Evidence</a>
       <a href="/app/transactions.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Transactions</a>
-      <a href="/app/deal-health.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Deal Health</a>
+      <a href="/app/deal-health.html" class="text-xs uppercase tracking-wide text-white">Deal Health</a>
       <a href="/app/rofr.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">ROFR</a>
       <a href="/app/settlement.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Settlement</a>
       <a href="/app/lending.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">Lending</a>
@@ -46,69 +46,42 @@
 
   <main class="max-w-5xl mx-auto px-6 py-10 space-y-8">
 
-    <a href="/app/transactions.html" class="text-xs uppercase tracking-wide text-slate-500 hover:text-white transition-colors">&larr; Back to Transactions</a>
-
     <section>
-      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Transaction</div>
-      <div id="tx-summary" class="border border-slate-800 bg-[#0d1220] p-6 grid grid-cols-2 md:grid-cols-4 gap-6 text-sm"></div>
-    </section>
-
-    <section class="grid grid-cols-1 md:grid-cols-2 gap-6">
-      <div>
-        <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Participants</div>
-        <div id="participants-box" class="border border-slate-800 bg-[#0d1220] p-6 text-sm space-y-2"></div>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Deal Health &amp; Risk Radar</div>
+      <div class="text-xs text-slate-600 mb-4">
+        A breakdown-only view across compliance, documentation, ownership, buyer readiness, settlement readiness, and
+        regulatory uncertainty for every transaction you're a party to — plus four binary risk flags per transaction.
+        Nothing here is an invented score; every status shown is a real, sourced fact with a stated reason.
       </div>
-      <div>
-        <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Compliance</div>
-        <div id="compliance-box" class="border border-slate-800 bg-[#0d1220] p-6 text-sm space-y-2"></div>
-      </div>
-    </section>
-
-    <section>
-      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Ownership</div>
-      <div id="ownership-box" class="border border-slate-800 bg-[#0d1220] p-6 flex items-center justify-between text-sm"></div>
-    </section>
-
-    <section>
-      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Documents</div>
       <div class="border border-slate-800 bg-[#0d1220]">
-        <div class="grid grid-cols-3 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
-          <div>Type</div>
-          <div>Description</div>
+        <div class="grid grid-cols-6 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
+          <div>ID</div>
+          <div>Listing</div>
           <div>Status</div>
+          <div>Main Risk</div>
+          <div>Risk Flags</div>
+          <div>Action</div>
         </div>
-        <div id="documents-rows"></div>
-        <div id="documents-empty" class="px-6 py-6 text-sm text-slate-500 hidden">No documents on file for this transaction yet.</div>
+        <div id="tx-rows"></div>
+        <div id="tx-empty" class="px-6 py-6 text-sm text-slate-500 hidden">No transactions yet.</div>
+        <div id="tx-loading" class="px-6 py-6 text-sm text-slate-500">Loading...</div>
       </div>
     </section>
 
-    <section>
-      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Deal Health</div>
-      <div class="border border-slate-800 bg-[#0d1220] p-6">
+    <section id="detail-section" class="hidden">
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4" id="detail-title">Transaction Detail</div>
+
+      <div class="border border-slate-800 bg-[#0d1220] p-6 mb-6">
+        <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Deal Health</div>
         <div id="health-summary" class="text-sm text-slate-300 mb-2"></div>
         <div id="health-main-risk" class="text-xs mb-4"></div>
         <div id="health-dimensions" class="grid grid-cols-1 md:grid-cols-2 gap-3"></div>
       </div>
-    </section>
 
-    <section>
-      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Risk Radar</div>
       <div class="border border-slate-800 bg-[#0d1220] p-6">
+        <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Risk Radar</div>
         <div id="risk-summary" class="text-sm text-slate-300 mb-4"></div>
         <div id="risk-flags" class="grid grid-cols-1 md:grid-cols-2 gap-3"></div>
-      </div>
-    </section>
-
-    <section>
-      <div class="text-xs uppercase tracking-wide text-slate-500 mb-4">Liquidity Roadmap</div>
-      <div class="border border-slate-800 bg-[#0d1220]">
-        <div class="grid grid-cols-4 gap-4 px-6 py-3 border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
-          <div>Step</div>
-          <div>Required</div>
-          <div>Status</div>
-          <div>Details</div>
-        </div>
-        <div id="roadmap-rows"></div>
       </div>
     </section>
 
@@ -120,9 +93,9 @@
       window.location.href = "/app/";
     }
 
-    const params = new URLSearchParams(window.location.search);
-    const txId = params.get("id");
-    let myId = null;
+    let transactions = [];
+    const healthMap = {};
+    const riskMap = {};
 
     function statusColor(status) {
       const map = {
@@ -130,6 +103,7 @@
         eligible: "text-green-400 border-green-900 bg-green-950/40",
         clear: "text-green-400 border-green-900 bg-green-950/40",
         known_complete: "text-green-400 border-green-900 bg-green-950/40",
+        completed: "text-green-400 border-green-900 bg-green-950/40",
         blocked: "text-red-400 border-red-900 bg-red-950/40",
         flagged: "text-red-400 border-red-900 bg-red-950/40",
         known_incomplete: "text-red-400 border-red-900 bg-red-950/40",
@@ -157,78 +131,103 @@
         window.location.href = "/app/";
         return;
       }
-      const data = await response.json();
-      document.getElementById("user-name").textContent = data.name;
-      myId = data.id;
-      loadDealRoom();
+      const user = await response.json();
+      document.getElementById("user-name").textContent = user.name;
+      loadData();
     }
 
-    async function loadDealRoom() {
-      if (!txId) {
-        document.getElementById("tx-summary").textContent = "No transaction id provided.";
-        return;
-      }
-      const response = await fetch("/deal-room/transaction/" + txId, {
+    async function loadData() {
+      const rows = document.getElementById("tx-rows");
+      const empty = document.getElementById("tx-empty");
+      const loading = document.getElementById("tx-loading");
+
+      const txResponse = await fetch("/transactions", {
         headers: { "Authorization": "Bearer " + token }
       });
-      if (response.status === 401) {
+      if (txResponse.status === 401) {
         localStorage.removeItem("kevo_token");
         window.location.href = "/app/";
         return;
       }
-      if (!response.ok) {
-        const errorData = await response.json();
-        document.getElementById("tx-summary").textContent = errorData.detail || "Could not load deal room.";
+      if (!txResponse.ok) {
+        loading.textContent = "Could not load transactions.";
         return;
       }
-      const data = await response.json();
 
-      const t = data.transaction;
-      document.getElementById("tx-summary").innerHTML =
-        "<div><div class=\"text-xs uppercase tracking-wide text-slate-500 mb-1\">ID</div><div class=\"font-mono\">" + t.id + "</div></div>" +
-        "<div><div class=\"text-xs uppercase tracking-wide text-slate-500 mb-1\">Listing</div><div class=\"font-mono\">" + t.listing_id + "</div></div>" +
-        "<div><div class=\"text-xs uppercase tracking-wide text-slate-500 mb-1\">Quantity</div><div class=\"font-mono\">" + t.quantity + "</div></div>" +
-        "<div><div class=\"text-xs uppercase tracking-wide text-slate-500 mb-1\">Price</div><div class=\"font-mono\">$" + t.agreed_price + " " + t.settlement_currency + "</div></div>" +
-        "<div class=\"md:col-span-4\"><div class=\"text-xs uppercase tracking-wide text-slate-500 mb-1\">Status</div>" + badge(t.status) + "</div>";
+      transactions = await txResponse.json();
 
-      const p = data.participants;
-      const youAre = p.buyer.id === myId ? "Buyer" : (p.seller.id === myId ? "Seller" : "Admin View");
-      document.getElementById("participants-box").innerHTML =
-        "<div>Buyer: <span class=\"font-mono\">#" + p.buyer.id + "</span></div>" +
-        "<div>Seller: <span class=\"font-mono\">#" + p.seller.id + "</span></div>" +
-        "<div class=\"text-slate-500\">Your position in this deal: <span class=\"text-white\">" + youAre + "</span></div>";
-
-      const c = data.compliance;
-      document.getElementById("compliance-box").innerHTML =
-        badge(c.status) + "<div class=\"text-slate-400\">" + c.explanation + "</div>";
-
-      const o = data.ownership;
-      document.getElementById("ownership-box").innerHTML =
-        "<div>" + o.records_on_file + " ownership record(s) on file</div>" +
-        badge(o.all_verified ? "verified" : "pending");
-
-      const docsRows = document.getElementById("documents-rows");
-      const docsEmpty = document.getElementById("documents-empty");
-      docsRows.innerHTML = "";
-      if (data.documents.length === 0) {
-        docsEmpty.classList.remove("hidden");
-      } else {
-        docsEmpty.classList.add("hidden");
-        data.documents.forEach(function (doc) {
-          const row = document.createElement("div");
-          row.className = "grid grid-cols-3 gap-4 px-6 py-3 border-b border-slate-800 last:border-b-0 text-sm";
-          row.innerHTML =
-            "<div>" + doc.evidence_type + "</div>" +
-            "<div class=\"text-slate-400\">" + (doc.description || "&mdash;") + "</div>" +
-            "<div>" + badge(doc.verification_status) + "</div>";
-          docsRows.appendChild(row);
-        });
+      if (transactions.length === 0) {
+        loading.classList.add("hidden");
+        empty.classList.remove("hidden");
+        return;
       }
 
-      const dh = data.deal_health;
+      const healthFetches = transactions.map(function (t) {
+        return fetch("/deal-health/transaction/" + t.id, {
+          headers: { "Authorization": "Bearer " + token }
+        }).then(function (r) { return r.ok ? r.json() : null; });
+      });
+      const riskFetches = transactions.map(function (t) {
+        return fetch("/risk-radar/transaction/" + t.id, {
+          headers: { "Authorization": "Bearer " + token }
+        }).then(function (r) { return r.ok ? r.json() : null; });
+      });
+
+      const healthResults = await Promise.all(healthFetches);
+      const riskResults = await Promise.all(riskFetches);
+
+      transactions.forEach(function (t, i) {
+        healthMap[t.id] = healthResults[i];
+        riskMap[t.id] = riskResults[i];
+      });
+
+      loading.classList.add("hidden");
+      empty.classList.add("hidden");
+      rows.innerHTML = "";
+
+      transactions.forEach(function (t) {
+        const dh = healthMap[t.id];
+        const rr = riskMap[t.id];
+        const mainRiskCell = dh
+          ? badge(dh.main_risk.status) + " <span class=\"text-slate-500\">" + dh.main_risk.dimension.replace(/_/g, " ") + "</span>"
+          : "<span class=\"text-slate-600\">&mdash;</span>";
+        const flaggedCount = rr ? rr.flags.filter(function (f) { return f.status !== "clear"; }).length : 0;
+        const riskCell = rr
+          ? "<span class=\"font-mono\">" + flaggedCount + " of " + rr.flags.length + " flagged</span>"
+          : "<span class=\"text-slate-600\">&mdash;</span>";
+
+        const row = document.createElement("div");
+        row.className = "grid grid-cols-6 gap-4 px-6 py-3 border-b border-slate-800 last:border-b-0 text-sm items-center";
+        row.innerHTML =
+          "<div class=\"font-mono\">" + t.id + "</div>" +
+          "<div>Listing #" + t.listing_id + "</div>" +
+          "<div>" + badge(t.status) + "</div>" +
+          "<div>" + mainRiskCell + "</div>" +
+          "<div>" + riskCell + "</div>" +
+          "<div><button data-tx-id=\"" + t.id + "\" class=\"detail-btn text-xs uppercase tracking-wide text-white bg-slate-700 hover:bg-slate-600 px-3 py-1.5 transition-colors\">View Details</button></div>";
+        rows.appendChild(row);
+      });
+
+      document.querySelectorAll(".detail-btn").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          showDetail(parseInt(btn.getAttribute("data-tx-id"), 10));
+        });
+      });
+    }
+
+    function showDetail(txId) {
+      const dh = healthMap[txId];
+      const rr = riskMap[txId];
+      if (!dh || !rr) {
+        return;
+      }
+
+      document.getElementById("detail-section").classList.remove("hidden");
+      document.getElementById("detail-title").textContent = "Transaction #" + txId + " — Deal Health & Risk Radar";
+
       document.getElementById("health-summary").textContent = dh.summary;
       document.getElementById("health-main-risk").innerHTML =
-        "Main risk: " + badge(dh.main_risk.status) + " <span class=\"text-slate-400\">(" + dh.main_risk.dimension + ") " + dh.main_risk.reason + "</span>";
+        "Main risk: " + badge(dh.main_risk.status) + " <span class=\"text-slate-400\">(" + dh.main_risk.dimension.replace(/_/g, " ") + ") " + dh.main_risk.reason + "</span>";
       const dimsBox = document.getElementById("health-dimensions");
       dimsBox.innerHTML = "";
       dh.dimensions.forEach(function (dim) {
@@ -242,7 +241,6 @@
         dimsBox.appendChild(card);
       });
 
-      const rr = data.risk_radar;
       document.getElementById("risk-summary").textContent = rr.summary;
       const flagsBox = document.getElementById("risk-flags");
       flagsBox.innerHTML = "";
@@ -257,18 +255,7 @@
         flagsBox.appendChild(card);
       });
 
-      const roadmapRows = document.getElementById("roadmap-rows");
-      roadmapRows.innerHTML = "";
-      data.liquidity_roadmap.steps.forEach(function (step) {
-        const row = document.createElement("div");
-        row.className = "grid grid-cols-4 gap-4 px-6 py-3 border-b border-slate-800 last:border-b-0 text-sm items-center";
-        row.innerHTML =
-          "<div class=\"text-white\">" + step.step_type.replace(/_/g, " ") + "</div>" +
-          "<div class=\"font-mono text-slate-300\">" + (step.required ? "Yes" : "No") + "</div>" +
-          "<div>" + badge(step.determinability) + "</div>" +
-          "<div class=\"text-xs text-slate-500\">" + step.reasons + "</div>";
-        roadmapRows.appendChild(row);
-      });
+      document.getElementById("detail-section").scrollIntoView({ behavior: "smooth" });
     }
 
     document.getElementById("logout-btn").addEventListener("click", function () {
