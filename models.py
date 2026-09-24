@@ -20,6 +20,16 @@ class User(Base):
     failed_login_attempts = Column(Integer, nullable=False, default=0)
     locked_until = Column(DateTime, nullable=True)
     tokens_valid_since = Column(DateTime, nullable=True)
+    # Batch B accountability extension (2026-09-24): a real, first-party
+    # consequence for defaulting on a seller-financing agreement -- KEVO
+    # restricting the buyer's OWN account on KEVO's OWN platform, not a
+    # credit report compiled for other companies to use (that would risk
+    # FCRA "consumer reporting agency" exposure). Admin-lifted only, same
+    # posture as every other "only an admin can attest this is resolved"
+    # gate already in the app (verify_ownership, kyc-status, etc.).
+    seller_financing_blocked = Column(Boolean, nullable=False, default=False)
+    seller_financing_blocked_at = Column(DateTime, nullable=True)
+    seller_financing_blocked_reason = Column(String(1000), nullable=True)
     phone_number = Column(String(30), nullable=True)
     date_of_birth = Column(Date, nullable=True)
     terms_accepted = Column(Boolean, nullable=False, default=False)
@@ -735,3 +745,71 @@ class AuditLogEntry(Base):
     target_id = Column(Integer, nullable=True)
     detail = Column(String(1000), nullable=True)
     created_at = Column(DateTime, nullable=False)
+
+
+class SellerFinancingAgreement(Base):
+    """
+    Batch B Group 3 item 9 (2026-09-24) - Seller Financing, tracking-only.
+
+    Dedicated research (the Reves v. Ernst & Young "family resemblance"
+    test for when a note is a security, TILA's business-purpose exemption,
+    and state-by-state usury variation) found this is buildable safely
+    under the same posture already approved for M26B/M26C/M26D: KEVO never
+    originates, funds, holds, or services this credit arrangement. The
+    seller and buyer negotiate their own principal, interest rate, and
+    term directly - the same caller-supplied-terms invariant already
+    enforced on Transaction.agreed_price - and KEVO only records the
+    agreement and its scheduled payments. No money moves through KEVO for
+    the installment payments; that happens directly between buyer and
+    seller, exactly as it would with no platform involved at all. Because
+    the note is a single, privately-negotiated, bilateral instrument tied
+    to one specific already-agreed transaction (never pooled, marketed, or
+    resold to other investors), it lands on the "not a security" side of
+    the Reves test - the same shape as an ordinary seller note in a
+    business sale. Because the purpose is buying an investment asset (not
+    a personal/household loan), it's exempt from TILA/Reg Z by design.
+    Usury limits vary by jurisdiction and are the contracting parties' own
+    responsibility, exactly like KEVO never validates agreed_price against
+    any jurisdiction's pricing rules.
+    """
+    __tablename__ = "seller_financing_agreements"
+
+    id = Column(Integer, primary_key=True)
+    transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=False, unique=True)
+    principal_amount = Column(Numeric(15, 2), nullable=False)
+    annual_interest_rate_pct = Column(Numeric(6, 3), nullable=False, default=0)
+    term_months = Column(Integer, nullable=False)
+    payment_frequency = Column(String(20), nullable=False, default="monthly")
+    first_payment_due_date = Column(Date, nullable=False)
+    status = Column(String(50), nullable=False, default="active")
+    source_reference = Column(String(500), nullable=True)
+    created_at = Column(DateTime, nullable=False)
+    default_reason = Column(String(1000), nullable=True)
+    defaulted_at = Column(DateTime, nullable=True)
+    resolution_notes = Column(String(1000), nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+
+
+class SellerFinancingPayment(Base):
+    """
+    One scheduled installment under a SellerFinancingAgreement. The full
+    schedule is generated deterministically (standard amortization math)
+    from the agreement's own caller-supplied principal/rate/term/frequency
+    at creation time - KEVO computes the arithmetic, never the terms
+    themselves. The seller (who is owed the money) marks a payment
+    received; KEVO never independently confirms money changed hands beyond
+    taking the seller's word, the same "can only attest to what we're
+    told" posture already accepted for buyer-interest/evidence
+    self-submission elsewhere in the app.
+    """
+    __tablename__ = "seller_financing_payments"
+
+    id = Column(Integer, primary_key=True)
+    agreement_id = Column(Integer, ForeignKey("seller_financing_agreements.id"), nullable=False)
+    installment_number = Column(Integer, nullable=False)
+    due_date = Column(Date, nullable=False)
+    amount_due = Column(Numeric(15, 2), nullable=False)
+    status = Column(String(50), nullable=False, default="pending")
+    paid_at = Column(DateTime, nullable=True)
+    paid_amount = Column(Numeric(15, 2), nullable=True)
+    notes = Column(String(1000), nullable=True)

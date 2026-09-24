@@ -20,11 +20,12 @@ import hashlib
 import httpx
 import json
 import secrets
+import calendar
 
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection, DealAlert, PasswordResetToken, AuditLogEntry
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection, DealAlert, PasswordResetToken, AuditLogEntry, SellerFinancingAgreement, SellerFinancingPayment
 from models import Transaction
 import escrow_client
 import email_client
@@ -1507,6 +1508,11 @@ def create_transaction(
             status_code=404,
             detail="Buyer not found"
         )
+    if buyer.seller_financing_blocked:
+        raise HTTPException(
+            status_code=403,
+            detail="This buyer's account is restricted due to an unresolved seller financing default."
+        )
 
     if current_user.id not in (buyer.id, seller.id):
         raise HTTPException(
@@ -2107,6 +2113,11 @@ def create_buyer_interest(
         raise HTTPException(
             status_code=403,
             detail="You can only create buyer interests for yourself"
+        )
+    if current_user.seller_financing_blocked:
+        raise HTTPException(
+            status_code=403,
+            detail="Your account is restricted due to an unresolved seller financing default. An admin must resolve it before you can express new interest."
         )
 
     new_interest = BuyerInterest(
@@ -6480,3 +6491,327 @@ def get_tender_offer_election(
     if current_user.account_type != "admin" and election.holder_id != current_user.id:
         raise HTTPException(status_code=403, detail="You do not have access to this tender offer election")
     return election
+
+
+# ---------------------------------------------------------------------------
+# Batch B Group 3 item 9 (2026-09-24) - Seller Financing, tracking-only.
+# See SellerFinancingAgreement's docstring in models.py for the legal
+# research (Reves test / TILA business-purpose exemption / usury variation)
+# behind this design. KEVO never originates, funds, holds, or services this
+# credit arrangement - it only records the caller-supplied terms and
+# generates the resulting payment schedule via ordinary amortization
+# arithmetic. No money moves through KEVO for the installment payments.
+# ---------------------------------------------------------------------------
+
+class SellerFinancingAgreementCreate(BaseModel):
+    transaction_id: int
+    principal_amount: float
+    annual_interest_rate_pct: float = 0
+    term_months: int
+    payment_frequency: str = "monthly"
+    first_payment_due_date: date
+    source_reference: str | None = None
+
+
+def _add_months(d: date, months: int) -> date:
+    month = d.month - 1 + months
+    year = d.year + month // 12
+    month = month % 12 + 1
+    day = min(d.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _generate_seller_financing_schedule(principal, annual_rate_pct, term_months, frequency, first_due_date):
+    months_per_period = {"monthly": 1, "quarterly": 3}[frequency]
+    num_payments = term_months // months_per_period
+    periodic_rate = (float(annual_rate_pct) / 100) * (months_per_period / 12)
+    principal = float(principal)
+
+    if periodic_rate == 0:
+        base_amount = round(principal / num_payments, 2)
+    else:
+        base_amount = round(
+            principal * periodic_rate / (1 - (1 + periodic_rate) ** -num_payments),
+            2
+        )
+
+    schedule = []
+    due_date = first_due_date
+    running_total = 0.0
+    target_total = round(base_amount * num_payments, 2)
+    for i in range(1, num_payments + 1):
+        if i < num_payments:
+            amount = base_amount
+        else:
+            # Last installment absorbs rounding drift from the prior
+            # payments so the schedule's total ties out to the cent
+            # instead of silently drifting.
+            amount = round(target_total - running_total, 2)
+        schedule.append((i, due_date, amount))
+        running_total += amount
+        due_date = _add_months(due_date, months_per_period)
+    return schedule
+
+
+def _get_seller_financing_agreement_or_404(agreement_id, db):
+    agreement = db.query(SellerFinancingAgreement).filter(SellerFinancingAgreement.id == agreement_id).first()
+    if agreement is None:
+        raise HTTPException(status_code=404, detail="Seller financing agreement not found")
+    return agreement
+
+
+def _require_seller_financing_party_or_admin(agreement, current_user, db):
+    transaction = db.query(Transaction).filter(Transaction.id == agreement.transaction_id).first()
+    if current_user.account_type != "admin" and current_user.id not in (transaction.buyer_id, transaction.seller_id):
+        raise HTTPException(status_code=403, detail="You are not a party to this seller financing agreement")
+    return transaction
+
+
+@app.post("/seller-financing-agreements")
+def create_seller_financing_agreement(
+    payload: SellerFinancingAgreementCreate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    transaction = db.query(Transaction).filter(Transaction.id == payload.transaction_id).first()
+    if transaction is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if current_user.account_type != "admin" and current_user.id != transaction.seller_id:
+        raise HTTPException(status_code=403, detail="Only the seller or an admin can set up seller financing for this transaction")
+    if transaction.status not in ("accepted", "settlement_pending"):
+        raise HTTPException(status_code=400, detail="Transaction must be accepted (or in settlement) before seller financing can be set up")
+
+    existing = db.query(SellerFinancingAgreement).filter(SellerFinancingAgreement.transaction_id == payload.transaction_id).first()
+    if existing is not None:
+        raise HTTPException(status_code=400, detail="A seller financing agreement already exists for this transaction")
+
+    if payload.principal_amount <= 0:
+        raise HTTPException(status_code=400, detail="principal_amount must be positive")
+    if payload.annual_interest_rate_pct < 0:
+        raise HTTPException(status_code=400, detail="annual_interest_rate_pct cannot be negative")
+    if payload.term_months <= 0:
+        raise HTTPException(status_code=400, detail="term_months must be positive")
+    if payload.payment_frequency not in ("monthly", "quarterly"):
+        raise HTTPException(status_code=400, detail="payment_frequency must be 'monthly' or 'quarterly'")
+    months_per_period = {"monthly": 1, "quarterly": 3}[payload.payment_frequency]
+    if payload.term_months % months_per_period != 0:
+        raise HTTPException(status_code=400, detail=f"term_months must be a multiple of {months_per_period} for {payload.payment_frequency} payments")
+
+    agreement = SellerFinancingAgreement(
+        transaction_id=payload.transaction_id,
+        principal_amount=payload.principal_amount,
+        annual_interest_rate_pct=payload.annual_interest_rate_pct,
+        term_months=payload.term_months,
+        payment_frequency=payload.payment_frequency,
+        first_payment_due_date=payload.first_payment_due_date,
+        status="active",
+        source_reference=payload.source_reference,
+        created_at=datetime.utcnow()
+    )
+    db.add(agreement)
+    db.commit()
+    db.refresh(agreement)
+
+    schedule = _generate_seller_financing_schedule(
+        payload.principal_amount,
+        payload.annual_interest_rate_pct,
+        payload.term_months,
+        payload.payment_frequency,
+        payload.first_payment_due_date
+    )
+    for installment_number, due_date, amount in schedule:
+        db.add(SellerFinancingPayment(
+            agreement_id=agreement.id,
+            installment_number=installment_number,
+            due_date=due_date,
+            amount_due=amount,
+            status="pending"
+        ))
+    db.commit()
+    db.refresh(agreement)
+    return agreement
+
+
+@app.put("/seller-financing-agreements/{agreement_id}/payments/{payment_id}/confirm")
+def confirm_seller_financing_payment(
+    agreement_id: int,
+    payment_id: int,
+    paid_amount: float | None = None,
+    notes: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    agreement = _get_seller_financing_agreement_or_404(agreement_id, db)
+    transaction = db.query(Transaction).filter(Transaction.id == agreement.transaction_id).first()
+    if current_user.account_type != "admin" and current_user.id != transaction.seller_id:
+        raise HTTPException(status_code=403, detail="Only the seller (who is owed this payment) or an admin can confirm it was received")
+    payment = db.query(SellerFinancingPayment).filter(
+        SellerFinancingPayment.id == payment_id,
+        SellerFinancingPayment.agreement_id == agreement_id
+    ).first()
+    if payment is None:
+        raise HTTPException(status_code=404, detail="Payment not found on this agreement")
+    if payment.status == "paid":
+        raise HTTPException(status_code=400, detail="This payment is already marked paid")
+    payment.status = "paid"
+    payment.paid_at = datetime.utcnow()
+    payment.paid_amount = paid_amount if paid_amount is not None else payment.amount_due
+    if notes is not None:
+        payment.notes = notes
+    db.commit()
+
+    remaining = db.query(SellerFinancingPayment).filter(
+        SellerFinancingPayment.agreement_id == agreement_id,
+        SellerFinancingPayment.status != "paid"
+    ).count()
+    if remaining == 0:
+        agreement.status = "completed"
+        db.commit()
+
+    db.refresh(payment)
+    return payment
+
+
+@app.put("/seller-financing-agreements/{agreement_id}/payments/{payment_id}/mark-late")
+def mark_seller_financing_payment_late(
+    agreement_id: int,
+    payment_id: int,
+    notes: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    agreement = _get_seller_financing_agreement_or_404(agreement_id, db)
+    transaction = db.query(Transaction).filter(Transaction.id == agreement.transaction_id).first()
+    if current_user.account_type != "admin" and current_user.id != transaction.seller_id:
+        raise HTTPException(status_code=403, detail="Only the seller or an admin can mark a payment late")
+    payment = db.query(SellerFinancingPayment).filter(
+        SellerFinancingPayment.id == payment_id,
+        SellerFinancingPayment.agreement_id == agreement_id
+    ).first()
+    if payment is None:
+        raise HTTPException(status_code=404, detail="Payment not found on this agreement")
+    if payment.status == "paid":
+        raise HTTPException(status_code=400, detail="Cannot mark an already-paid payment as late")
+    payment.status = "late"
+    if notes is not None:
+        payment.notes = notes
+    db.commit()
+    db.refresh(payment)
+    return payment
+
+
+@app.get("/seller-financing-agreements")
+def get_seller_financing_agreements(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type == "admin":
+        return db.query(SellerFinancingAgreement).all()
+    own_transaction_ids = [
+        t.id for t in db.query(Transaction).filter(
+            (Transaction.buyer_id == current_user.id) | (Transaction.seller_id == current_user.id)
+        ).all()
+    ]
+    return db.query(SellerFinancingAgreement).filter(SellerFinancingAgreement.transaction_id.in_(own_transaction_ids)).all()
+
+
+@app.get("/seller-financing-agreements/{agreement_id}")
+def get_seller_financing_agreement(
+    agreement_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    agreement = _get_seller_financing_agreement_or_404(agreement_id, db)
+    _require_seller_financing_party_or_admin(agreement, current_user, db)
+    return agreement
+
+
+@app.get("/seller-financing-agreements/{agreement_id}/payments")
+def get_seller_financing_payments(
+    agreement_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    agreement = _get_seller_financing_agreement_or_404(agreement_id, db)
+    _require_seller_financing_party_or_admin(agreement, current_user, db)
+    return db.query(SellerFinancingPayment).filter(
+        SellerFinancingPayment.agreement_id == agreement_id
+    ).order_by(SellerFinancingPayment.installment_number).all()
+
+
+@app.put("/seller-financing-agreements/{agreement_id}/default")
+def mark_seller_financing_agreement_defaulted(
+    agreement_id: int,
+    reason: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Batch B accountability extension (2026-09-24). The seller (or admin)
+    marks an agreement defaulted when the buyer has stopped paying -
+    KEVO does not decide this on its own via any invented threshold, since
+    what actually counts as default is up to the parties' own note, the
+    same reasoning already applied to never inventing agreed_price or an
+    interest rate. The real consequence is on the buyer's own KEVO
+    account, not a report compiled for other companies (see User.
+    seller_financing_blocked's docstring for why that distinction
+    matters). Acceleration - whether the full remaining balance is now
+    demandable - is a fact about the parties' own note, not something
+    KEVO enforces; this endpoint records that a default happened and
+    applies KEVO's own platform-level consequence, nothing more.
+    """
+    agreement = _get_seller_financing_agreement_or_404(agreement_id, db)
+    transaction = db.query(Transaction).filter(Transaction.id == agreement.transaction_id).first()
+    if current_user.account_type != "admin" and current_user.id != transaction.seller_id:
+        raise HTTPException(status_code=403, detail="Only the seller or an admin can mark this agreement defaulted")
+    if agreement.status != "active":
+        raise HTTPException(status_code=400, detail=f"Agreement must be 'active' to be marked defaulted (currently '{agreement.status}')")
+
+    agreement.status = "defaulted"
+    agreement.default_reason = reason
+    agreement.defaulted_at = datetime.utcnow()
+    db.commit()
+
+    buyer = db.query(UserModel).filter(UserModel.id == transaction.buyer_id).first()
+    buyer.seller_financing_blocked = True
+    buyer.seller_financing_blocked_at = datetime.utcnow()
+    buyer.seller_financing_blocked_reason = f"Defaulted on seller financing agreement #{agreement.id}: {reason}"
+    db.commit()
+    db.refresh(agreement)
+    return agreement
+
+
+@app.put("/seller-financing-agreements/{agreement_id}/resolve-default")
+def resolve_seller_financing_default(
+    agreement_id: int,
+    resolution_notes: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Admin-only, mirroring every other "only an admin can attest this is
+    resolved" gate already in the app - a buyer cannot self-declare their
+    own way out of a restriction. Lifts the account-level block; whatever
+    actually happened (renegotiated, paid off outside the platform,
+    written off, escalated) is recorded in resolution_notes as free text,
+    not a KEVO-invented outcome category.
+    """
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can resolve a seller financing default")
+    agreement = _get_seller_financing_agreement_or_404(agreement_id, db)
+    if agreement.status != "defaulted":
+        raise HTTPException(status_code=400, detail=f"Agreement must be 'defaulted' to be resolved (currently '{agreement.status}')")
+
+    agreement.status = "resolved"
+    agreement.resolution_notes = resolution_notes
+    agreement.resolved_at = datetime.utcnow()
+    db.commit()
+
+    transaction = db.query(Transaction).filter(Transaction.id == agreement.transaction_id).first()
+    buyer = db.query(UserModel).filter(UserModel.id == transaction.buyer_id).first()
+    buyer.seller_financing_blocked = False
+    buyer.seller_financing_blocked_at = None
+    buyer.seller_financing_blocked_reason = None
+    db.commit()
+    db.refresh(agreement)
+    return agreement
