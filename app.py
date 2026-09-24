@@ -17,13 +17,15 @@ import bcrypt
 import jwt
 import hashlib
 import json
+import secrets
 
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection, DealAlert
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection, DealAlert, PasswordResetToken
 from models import Transaction
 import escrow_client
+import email_client
 app = FastAPI(title="KEVO API")
 
 # M28 (first slice) - serves the web app's login + dashboard shell as static
@@ -129,6 +131,15 @@ class SetPasswordRequest(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
+    new_password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
     new_password: str
 
 
@@ -895,6 +906,79 @@ def change_password(
     db.commit()
 
     return {"message": "Password changed successfully"}
+
+
+@app.post("/forgot-password")
+def forgot_password(request: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    """
+    Full-gap-closure pass (Batch B, group 3 item 15), 2026-09-24 - always
+    returns the same generic message whether or not the email exists, to
+    avoid leaking account existence. Deliberately does not catch
+    RuntimeError from email_client.send_email() - if email isn't
+    configured yet, this fails loudly (500) rather than pretending to
+    have sent an email it didn't send.
+    """
+    generic_response = {"message": "If an account with that email exists, a password reset link has been sent."}
+
+    user = db.query(UserModel).filter(UserModel.email == request.email).first()
+    if user is None:
+        return generic_response
+
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    now = datetime.utcnow()
+
+    reset_token = PasswordResetToken(
+        user_id=user.id,
+        token_hash=token_hash,
+        created_at=now,
+        expires_at=now + timedelta(minutes=30),
+        used_at=None
+    )
+    db.add(reset_token)
+    db.commit()
+
+    reset_link = f"https://kevo.example/reset-password?token={raw_token}"
+    email_client.send_email(
+        user.email,
+        "Reset your KEVO password",
+        f"""Click here to reset your password: {reset_link}
+
+This link expires in 30 minutes and can only be used once. If you didn't request this, you can ignore this email."""
+    )
+
+    return generic_response
+
+
+@app.post("/reset-password")
+def reset_password(request: ResetPasswordRequest, db: Session = Depends(get_db)):
+    """
+    Full-gap-closure pass (Batch B, group 3 item 15), 2026-09-24 - hashes
+    the provided raw token and looks up the match by hash (never stores
+    or compares the raw token), rejects if already used or expired, then
+    updates the password and marks the token used in the same commit.
+    """
+    token_hash = hashlib.sha256(request.token.encode()).hexdigest()
+    reset_token = db.query(PasswordResetToken).filter(PasswordResetToken.token_hash == token_hash).first()
+
+    if reset_token is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+
+    if reset_token.used_at is not None:
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+
+    if reset_token.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+
+    user = db.query(UserModel).filter(UserModel.id == reset_token.user_id).first()
+    if user is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+
+    user.hashed_password = hash_password(request.new_password)
+    reset_token.used_at = datetime.utcnow()
+    db.commit()
+
+    return {"message": "Password reset successfully"}
 
 
 @app.get("/compliance-rules/matches/{buyer_id}/{listing_id}")

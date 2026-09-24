@@ -477,6 +477,26 @@ class RofrRequest(Base):
     escrow_release_initiated = Column(Boolean, nullable=False, default=False)
     responded_at = Column(DateTime, nullable=True)
     source_reference = Column(String(500), nullable=True)
+class PasswordResetToken(Base):
+    """
+    Full-gap-closure pass (Batch B, group 3 item 15), 2026-09-24 - the
+    real forgot-password flow that's been a flagged gap since M18/M28
+    (a user locked out with no way to prove identity by email had no
+    path back in). Stores only a SHA-256 hash of the reset token, never
+    the raw value - the raw token exists only in the emailed link and
+    the requester's browser, mirroring how KEVO never stores a raw
+    password either. Single-use (used_at) and time-limited (expires_at).
+    """
+    __tablename__ = "password_reset_tokens"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    created_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+
+
 class SettlementRecord(Base):
     """
     M26 (first slice) - Settlement status tracking, orchestration-only.
