@@ -273,3 +273,95 @@ def test_transaction_exceeding_remaining_by_one_unit_fails(client, db_session):
     # only 200 left, asking for 201 - should fail (boundary)
     resp = client.post("/transactions", json=txn_payload(listing.id, buyer2.id, 201), headers=auth_headers(buyer2))
     assert resp.status_code == 400
+
+
+# --- The second gap: accept-time re-check (the true commitment point) ---
+# create_transaction only ever validated quantity while a transaction sat at
+# "interested" (which doesn't count against the listing at all). The endpoint
+# that actually commits a listing's shares - PATCH /transactions/{id}/status
+# moving it to "accepted" - never re-checked quantity. Two independently-valid
+# "interested" transactions could both be accepted and oversell the listing,
+# with no concurrency/race needed at all, just two ordinary sequential calls.
+
+def test_accept_succeeds_when_within_available_quantity(client, db_session):
+    seller = make_seller(db_session)
+    buyer = make_buyer(db_session)
+    listing = make_listing(db_session, seller, quantity=1000)
+    txn = make_transaction(db_session, listing, buyer, 500, "interested")
+
+    resp = client.patch(f"/transactions/{txn.id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
+    assert resp.status_code == 200
+    assert resp.json()["transaction"]["status"] == "accepted"
+
+
+def test_accept_blocked_by_already_accepted_transaction_on_same_listing(client, db_session):
+    seller = make_seller(db_session)
+    buyer1 = make_buyer(db_session, "1")
+    buyer2 = make_buyer(db_session, "2")
+    listing = make_listing(db_session, seller, quantity=1000)
+    make_transaction(db_session, listing, buyer1, 800, "accepted")
+    txn2 = make_transaction(db_session, listing, buyer2, 500, "interested")
+
+    # 800 already accepted, only 200 left - accepting this 500 should fail
+    resp = client.patch(f"/transactions/{txn2.id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
+    assert resp.status_code == 400
+    assert "quantity" in resp.json()["detail"].lower()
+
+
+def test_sequential_accepts_that_together_oversell_are_blocked(client, db_session):
+    # This is the exact scenario create_transaction's check could never catch:
+    # both transactions were individually valid ("interested" doesn't count
+    # against the listing), so both were allowed to be created. It's only at
+    # the point of accepting the second one that the oversell becomes real.
+    seller = make_seller(db_session)
+    buyer1 = make_buyer(db_session, "1")
+    buyer2 = make_buyer(db_session, "2")
+    listing = make_listing(db_session, seller, quantity=1000)
+    txn1 = make_transaction(db_session, listing, buyer1, 600, "interested")
+    txn2 = make_transaction(db_session, listing, buyer2, 600, "interested")
+
+    resp1 = client.patch(f"/transactions/{txn1.id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
+    assert resp1.status_code == 200
+
+    # 600 already accepted, only 400 left - accepting this second 600 must fail
+    resp2 = client.patch(f"/transactions/{txn2.id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
+    assert resp2.status_code == 400
+    assert "quantity" in resp2.json()["detail"].lower()
+
+
+def test_accept_exactly_filling_remaining_quantity_succeeds(client, db_session):
+    seller = make_seller(db_session)
+    buyer1 = make_buyer(db_session, "1")
+    buyer2 = make_buyer(db_session, "2")
+    listing = make_listing(db_session, seller, quantity=1000)
+    make_transaction(db_session, listing, buyer1, 800, "accepted")
+    txn2 = make_transaction(db_session, listing, buyer2, 200, "interested")
+
+    # exactly 200 left, accepting exactly 200 - should succeed (boundary)
+    resp = client.patch(f"/transactions/{txn2.id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
+    assert resp.status_code == 200
+
+
+def test_accept_exceeding_remaining_by_one_unit_fails(client, db_session):
+    seller = make_seller(db_session)
+    buyer1 = make_buyer(db_session, "1")
+    buyer2 = make_buyer(db_session, "2")
+    listing = make_listing(db_session, seller, quantity=1000)
+    make_transaction(db_session, listing, buyer1, 800, "accepted")
+    txn2 = make_transaction(db_session, listing, buyer2, 201, "interested")
+
+    # only 200 left, accepting 201 - should fail (boundary)
+    resp = client.patch(f"/transactions/{txn2.id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
+    assert resp.status_code == 400
+
+
+def test_accept_not_blocked_by_rejected_or_cancelled_transactions(client, db_session):
+    seller = make_seller(db_session)
+    buyer1 = make_buyer(db_session, "1")
+    buyer2 = make_buyer(db_session, "2")
+    listing = make_listing(db_session, seller, quantity=1000)
+    make_transaction(db_session, listing, buyer1, 900, "rejected")
+    txn2 = make_transaction(db_session, listing, buyer2, 900, "interested")
+
+    resp = client.patch(f"/transactions/{txn2.id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
+    assert resp.status_code == 200

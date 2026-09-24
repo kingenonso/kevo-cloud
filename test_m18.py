@@ -103,6 +103,10 @@ def test_signup_stores_bcrypt_hash_not_plaintext(client, db_session):
         "email": "newuser@test.com",
         "role": "seller",
         "password": "supersecret123",
+        "phone_number": "+1-555-0100",
+        "date_of_birth": "1990-01-01",
+        "jurisdiction": "United Kingdom",
+        "terms_accepted": True,
     })
     assert response.status_code == 200
 
