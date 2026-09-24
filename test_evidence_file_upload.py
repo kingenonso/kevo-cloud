@@ -66,6 +66,54 @@ def patched_upload_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "UPLOAD_DIR", str(tmp_path / "evidence_uploads"))
 
 
+class _FakeValidatorResponse:
+    """Stands in for an httpx.Response from kevo-file-validator."""
+
+    def __init__(self, status_code, json_data=None, content=b""):
+        self.status_code = status_code
+        self._json_data = json_data
+        self.content = content
+
+    def json(self):
+        return self._json_data
+
+
+class _FakeValidatorClient:
+    """Stands in for httpx.AsyncClient so these tests never need the real
+    Rust kevo-file-validator service running. It behaves like a permissive
+    validator: accepts anything, echoes the original bytes back unchanged.
+    The real validator's actual behavior (magic-byte checks, image
+    re-encode, PDF active-content scan) is verified separately against the
+    real Rust service, not here - these tests are about upload_evidence_file's
+    own logic (auth, ownership, hashing, storage).
+    """
+
+    def __init__(self, *args, **kwargs):
+        self._last_bytes = b""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, url, files=None, **kwargs):
+        _, file_bytes, _ = files["file"]
+        self._last_bytes = file_bytes
+        return _FakeValidatorResponse(
+            status_code=200,
+            json_data={"safe_filename": "00000000-0000-0000-0000-000000000000.bin"},
+        )
+
+    async def get(self, url, **kwargs):
+        return _FakeValidatorResponse(status_code=200, content=self._last_bytes)
+
+
+@pytest.fixture(autouse=True)
+def mock_file_validator(monkeypatch):
+    monkeypatch.setattr(app_module.httpx, "AsyncClient", _FakeValidatorClient)
+
+
 def auth_headers(user):
     return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 

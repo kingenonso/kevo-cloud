@@ -17,6 +17,7 @@ import uuid
 import bcrypt
 import jwt
 import hashlib
+import httpx
 import json
 import secrets
 
@@ -2511,6 +2512,7 @@ def get_evidence_record(
 # passed to POST /evidence originally, if anything.
 # ---------------------------------------------------------------------------
 
+FILE_VALIDATOR_URL = "http://127.0.0.1:8090"
 UPLOAD_DIR = "uploads/evidence"
 MAX_EVIDENCE_UPLOAD_BYTES = 20 * 1024 * 1024
 
@@ -2548,18 +2550,45 @@ async def upload_evidence_file(
     if len(contents) > MAX_EVIDENCE_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="File exceeds the 20MB upload limit")
 
-    file_hash = hashlib.sha256(contents).hexdigest()
+    # Defense-in-depth (file-upload-security item 7/10): never trust the
+    # client's Content-Type or filename extension. Every upload goes to the
+    # kevo-file-validator Rust service, which sniffs the real file type from
+    # its magic bytes, re-encodes images to strip embedded payloads, scans
+    # PDFs for active-content markers, and returns a server-generated safe
+    # filename. We only ever store what THAT service hands back.
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            validator_resp = await client.post(
+                f"{FILE_VALIDATOR_URL}/validate-upload",
+                files={"file": (file.filename or "upload", contents, file.content_type or "application/octet-stream")},
+            )
 
-    original_name = file.filename or "upload"
-    _, ext = os.path.splitext(original_name)
-    safe_ext = "".join(c for c in ext if c.isalnum() or c == ".")[:10]
+            if validator_resp.status_code != 200:
+                try:
+                    detail = validator_resp.json().get("error", "file failed validation")
+                except ValueError:
+                    detail = "file failed validation"
+                raise HTTPException(status_code=400, detail=detail)
+
+            validated = validator_resp.json()
+            safe_filename = validated["safe_filename"]
+            safe_ext = "." + safe_filename.rsplit(".", 1)[-1]
+
+            fetch_resp = await client.get(f"{FILE_VALIDATOR_URL}/uploads/{safe_filename}")
+            if fetch_resp.status_code != 200:
+                raise HTTPException(status_code=503, detail="Could not retrieve the validated file - upload rejected")
+    except httpx.HTTPError:
+        raise HTTPException(status_code=503, detail="File validation service is unavailable - upload rejected (fail closed)")
+
+    safe_contents = fetch_resp.content
+    file_hash = hashlib.sha256(safe_contents).hexdigest()
 
     evidence_dir = os.path.join(UPLOAD_DIR, str(evidence_id))
     os.makedirs(evidence_dir, exist_ok=True)
     stored_path = os.path.join(evidence_dir, file_hash + safe_ext)
 
     with open(stored_path, "wb") as out_file:
-        out_file.write(contents)
+        out_file.write(safe_contents)
 
     evidence.file_reference = "/evidence/" + str(evidence_id) + "/file"
     evidence.file_hash = file_hash
@@ -5051,13 +5080,30 @@ def create_settlement_record(
         raise HTTPException(status_code=404, detail="Transaction not found")
     if transaction.status != "accepted":
         raise HTTPException(status_code=400, detail="Transaction must be in 'accepted' status to begin settlement")
+
     existing = db.query(SettlementRecord).filter(SettlementRecord.transaction_id == transaction_id).first()
+    settlement_record = None
     if existing is not None:
-        raise HTTPException(status_code=400, detail="A settlement record already exists for this transaction")
+        if existing.status == "escrow_creation_unconfirmed":
+            raise HTTPException(
+                status_code=409,
+                detail="A previous attempt to create this settlement's escrow transaction did not confirm "
+                       "success. An admin must resolve it via PUT /settlement-records/{id}/resolve-unconfirmed-creation "
+                       "before retrying, to avoid creating a duplicate transaction on Escrow.com."
+            )
+        if existing.status != "escrow_creation_abandoned":
+            raise HTTPException(status_code=400, detail="A settlement record already exists for this transaction")
+        # Previously marked abandoned by an admin who confirmed directly with
+        # Escrow.com that no transaction was actually created - safe to reuse
+        # this row for a fresh attempt (transaction_id is unique, so we
+        # update in place rather than inserting a second row).
+        settlement_record = existing
+
     buyer = db.query(UserModel).filter(UserModel.id == transaction.buyer_id).first()
     seller = db.query(UserModel).filter(UserModel.id == transaction.seller_id).first()
     if buyer is None or seller is None:
         raise HTTPException(status_code=400, detail="Transaction is missing a buyer or seller account")
+
     try:
         escrow_txn = escrow_client.create_transaction(
             buyer_email=buyer.email,
@@ -5067,7 +5113,28 @@ def create_settlement_record(
             description=f"KEVO transaction #{transaction.id}"
         )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Could not set up the escrow transaction: {exc}")
+        # We can't tell whether Escrow.com actually created the transaction
+        # before this failure (e.g. a timeout waiting on their response), so
+        # this is never just an error we forget about. A persistent record
+        # is kept so a blind retry can't create a duplicate transaction on
+        # Escrow.com; an admin must manually verify and resolve it.
+        if settlement_record is None:
+            settlement_record = SettlementRecord(transaction_id=transaction_id)
+            db.add(settlement_record)
+        settlement_record.status = "escrow_creation_unconfirmed"
+        settlement_record.escrow_provider_reference = None
+        settlement_record.notes = (
+            f"Escrow.com transaction creation did not confirm success: {exc}. "
+            "An admin must verify directly with Escrow.com whether a transaction "
+            "was actually created before this can be retried."
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=502,
+            detail="Could not confirm the escrow transaction was created - this settlement now needs manual "
+                   "admin reconciliation (see notes) before it can be retried"
+        )
+
     # Escrow.com may not yet allow KEVO to auto-agree on a party's behalf
     # (a partner permission that has to be individually granted). When
     # that happens, this does not block settlement - it falls back to
@@ -5095,14 +5162,52 @@ def create_settlement_record(
             notes_text = "Awaiting manual agreement on Escrow.com - " + " | ".join(links)
         else:
             notes_text = "Awaiting manual agreement on Escrow.com for: " + ", ".join(unagreed_emails)
-    settlement_record = SettlementRecord(
-        transaction_id=transaction_id,
-        status="pending",
-        escrow_provider_reference=str(escrow_txn["id"]),
-        notes=notes_text
-    )
+
+    if settlement_record is None:
+        settlement_record = SettlementRecord(transaction_id=transaction_id)
+        db.add(settlement_record)
+    settlement_record.status = "pending"
+    settlement_record.escrow_provider_reference = str(escrow_txn["id"])
+    settlement_record.notes = notes_text
     transaction.status = "settlement_pending"
-    db.add(settlement_record)
+    db.commit()
+    db.refresh(settlement_record)
+    return settlement_record
+
+
+@app.put("/settlement-records/{settlement_record_id}/resolve-unconfirmed-creation")
+def resolve_unconfirmed_escrow_creation(
+    settlement_record_id: int,
+    escrow_provider_reference: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can resolve an unconfirmed escrow creation")
+    settlement_record = db.query(SettlementRecord).filter(SettlementRecord.id == settlement_record_id).first()
+    if settlement_record is None:
+        raise HTTPException(status_code=404, detail="Settlement record not found")
+    if settlement_record.status != "escrow_creation_unconfirmed":
+        raise HTTPException(status_code=400, detail="This settlement record is not in an unconfirmed state")
+
+    if escrow_provider_reference:
+        # Admin checked Escrow.com directly and confirmed the transaction
+        # WAS actually created - attach the real reference and let this
+        # settlement proceed through the normal flow.
+        settlement_record.escrow_provider_reference = escrow_provider_reference
+        settlement_record.status = "pending"
+        settlement_record.notes = (settlement_record.notes or "") + " | Resolved: confirmed created on Escrow.com."
+        transaction = db.query(Transaction).filter(Transaction.id == settlement_record.transaction_id).first()
+        if transaction is not None:
+            transaction.status = "settlement_pending"
+    else:
+        # Admin checked Escrow.com directly and confirmed NO transaction was
+        # actually created - safe to retry. The record is never deleted
+        # (audit trail preserved); it's marked abandoned so a fresh
+        # POST /settlement-records can reuse it cleanly.
+        settlement_record.status = "escrow_creation_abandoned"
+        settlement_record.notes = (settlement_record.notes or "") + " | Resolved: confirmed NOT created on Escrow.com, safe to retry."
+
     db.commit()
     db.refresh(settlement_record)
     return settlement_record
