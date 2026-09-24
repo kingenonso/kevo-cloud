@@ -117,9 +117,12 @@ class UserCreate(BaseModel):
     name: str
     email: str
     password: str
+    phone_number: str
+    date_of_birth: date
     role: str = "buyer"
     seller_affiliate_status: str | None = None
-    jurisdiction: str | None = None
+    jurisdiction: str
+    terms_accepted: bool
 
 
 class LoginRequest(BaseModel):
@@ -838,6 +841,13 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     if user is None:
         raise credentials_exception
 
+    if not user.is_active:
+        raise HTTPException(
+            status_code=401,
+            detail="This account has been deactivated",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
     if user.tokens_valid_since is not None:
         if issued_at is None or datetime.utcfromtimestamp(issued_at) < user.tokens_valid_since:
             raise HTTPException(
@@ -862,6 +872,14 @@ def login(request: Request, credentials: LoginRequest, db: Session = Depends(get
         raise HTTPException(
             status_code=401,
             detail="Incorrect email or password"
+        )
+
+    if not user.is_active:
+        log_audit_event(db, user.id, "login_blocked_deactivated")
+        db.commit()
+        raise HTTPException(
+            status_code=403,
+            detail="This account has been deactivated"
         )
 
     if user.locked_until is not None and user.locked_until > datetime.utcnow():
@@ -896,6 +914,63 @@ def login(request: Request, credentials: LoginRequest, db: Session = Depends(get
     return {
         "access_token": access_token,
         "token_type": "bearer"
+    }
+
+
+@app.delete("/users/{user_id}")
+def deactivate_user(
+    user_id: int,
+    reason: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Batch B item 5/13 - "make sure the user-account-delete endpoint
+    doesn't actually delete the account - set it inactive with a reason
+    instead." There was no account-delete endpoint of any kind before
+    this - this is the first one, and it never issues a real DELETE
+    against the row. A deactivated account can no longer log in
+    (checked in /login) and any token it's already holding stops
+    working immediately (checked in get_current_user, and its sessions
+    are revoked the same way /users/me/revoke-tokens does it).
+    """
+    target = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    is_admin = current_user.account_type == "admin"
+    if not is_admin and current_user.id != target.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only deactivate your own account"
+        )
+
+    if not reason or not reason.strip():
+        raise HTTPException(status_code=400, detail="A reason is required to deactivate an account")
+
+    if not target.is_active:
+        raise HTTPException(status_code=400, detail="This account is already deactivated")
+
+    target.is_active = False
+    target.deactivated_at = datetime.utcnow()
+    target.deactivation_reason = reason
+    target.tokens_valid_since = datetime.utcnow().replace(microsecond=0)
+
+    log_audit_event(
+        db, current_user.id, "account_deactivated",
+        target_type="user", target_id=target.id, detail=reason
+    )
+    db.commit()
+    db.refresh(target)
+
+    return {
+        "message": "Account deactivated",
+        "user": {
+            "id": target.id,
+            "is_active": target.is_active,
+            "deactivated_at": target.deactivated_at.isoformat(),
+            "deactivation_reason": target.deactivation_reason
+        }
     }
 
 
@@ -1195,6 +1270,9 @@ def get_transferability_matrix(
         "asset_type": asset_type,
         "jurisdictions": matrix
     }
+MIN_SIGNUP_AGE_YEARS = 18
+
+
 @app.post("/users")
 def create_user(
     user: UserCreate,
@@ -1216,13 +1294,39 @@ def create_user(
             detail="Role must be buyer or seller"
         )
 
+    if not user.terms_accepted:
+        raise HTTPException(
+            status_code=400,
+            detail="You must accept the Terms & Conditions and Privacy Policy to create an account"
+        )
+
+    if not user.phone_number.strip():
+        raise HTTPException(status_code=400, detail="Phone number is required")
+
+    if not user.jurisdiction.strip():
+        raise HTTPException(status_code=400, detail="Jurisdiction is required")
+
+    today = date.today()
+    age_years = today.year - user.date_of_birth.year - (
+        (today.month, today.day) < (user.date_of_birth.month, user.date_of_birth.day)
+    )
+    if age_years < MIN_SIGNUP_AGE_YEARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"You must be at least {MIN_SIGNUP_AGE_YEARS} years old to create a KEVO account"
+        )
+
     new_user = UserModel(
         name=user.name,
         email=user.email,
         hashed_password=hash_password(user.password),
         role=user.role,
         seller_affiliate_status=user.seller_affiliate_status,
-        jurisdiction=user.jurisdiction
+        jurisdiction=user.jurisdiction,
+        phone_number=user.phone_number,
+        date_of_birth=user.date_of_birth,
+        terms_accepted=True,
+        terms_accepted_at=datetime.utcnow(),
     )
 
     db.add(new_user)
@@ -1237,7 +1341,10 @@ def create_user(
             "email": new_user.email,
             "role": new_user.role,
             "seller_affiliate_status": new_user.seller_affiliate_status,
-            "jurisdiction": new_user.jurisdiction
+            "jurisdiction": new_user.jurisdiction,
+            "phone_number": new_user.phone_number,
+            "date_of_birth": str(new_user.date_of_birth) if new_user.date_of_birth else None,
+            "terms_accepted": new_user.terms_accepted
         }
     }
 
@@ -1947,6 +2054,24 @@ def update_transaction_status(
             status_code=403,
             detail="Only the seller can accept or reject a transaction"
         )
+
+    if status == "accepted":
+        listing = db.query(ListingModel).filter(
+            ListingModel.id == transaction.listing_id
+        ).with_for_update().first()
+
+        if listing is not None:
+            committed_transactions = db.query(Transaction).filter(
+                Transaction.listing_id == transaction.listing_id,
+                Transaction.status.in_(["accepted", "settlement_pending", "completed"])
+            ).all()
+            committed_quantity = sum(t.quantity for t in committed_transactions)
+
+            if transaction.quantity + committed_quantity > listing.quantity:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Not enough quantity available - already committed to other accepted transactions on this listing"
+                )
 
     transaction.status = status
 

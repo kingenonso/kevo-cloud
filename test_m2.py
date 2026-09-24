@@ -16,6 +16,13 @@ endpoint, mirroring the exact shape of the already-existing (and correct)
 PUT /ownership/{id}/verify endpoint. No "pending" state, no other new
 functionality, per explicit scope instruction.
 
+Updated 2026-09-24 (Batch B, item 3/13 - "signup should have more than
+just email and password"): phone_number, date_of_birth and terms_accepted
+are now required at signup, and jurisdiction moved from optional to
+required. test_create_user_jurisdiction_is_optional is replaced by
+test_create_user_missing_jurisdiction_rejected_400, and three new tests
+cover the other new required-field validation.
+
 Runs against an isolated in-memory SQLite database, same pattern as
 test_m13.py / test_m14.py / test_m15.py / test_m16.py.
 """
@@ -28,6 +35,8 @@ os.environ.setdefault("DB_NAME", "kevo_test_placeholder")
 os.environ.setdefault("DB_USER", "kevo_test_placeholder")
 os.environ.setdefault("DB_PASSWORD", "kevo_test_placeholder")
 
+from datetime import date
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -36,6 +45,11 @@ from sqlalchemy.pool import StaticPool
 
 from models import Base, User as UserModel, Listing as ListingModel
 from app import app, get_db, assess_compliance, hash_password, create_access_token
+
+
+# Every signup payload needs these now - spread into each test's json dict
+# so each test only has to spell out the fields it actually cares about.
+SIGNUP_EXTRA = {"phone_number": "+1-555-0100", "date_of_birth": "1990-01-01", "terms_accepted": True}
 
 
 @pytest.fixture()
@@ -85,6 +99,7 @@ def client(db_session):
 
 def test_create_user_accepts_and_stores_jurisdiction(client, db_session):
     response = client.post("/users", json={
+        **SIGNUP_EXTRA,
         "name": "Jane Buyer", "email": "jane.buyer@example.com",
         "role": "buyer", "jurisdiction": "United Kingdom", "password": "testpass123",
     })
@@ -96,23 +111,75 @@ def test_create_user_accepts_and_stores_jurisdiction(client, db_session):
     assert stored.jurisdiction == "United Kingdom"
 
 
-def test_create_user_jurisdiction_is_optional(client, db_session):
+def test_create_user_missing_jurisdiction_rejected_400(client, db_session):
     response = client.post("/users", json={
-        "name": "No Jurisdiction Yet", "email": "nojurisdiction@example.com", "role": "buyer", "password": "testpass123",
+        **SIGNUP_EXTRA,
+        "name": "No Jurisdiction Yet", "email": "nojurisdiction@example.com",
+        "role": "buyer", "password": "testpass123", "jurisdiction": "",
     })
-    assert response.status_code == 200
-    assert response.json()["user"]["jurisdiction"] is None
+    assert response.status_code == 400
 
 
 def test_create_user_duplicate_email_still_rejected(client, db_session):
-    client.post("/users", json={"name": "A", "email": "dup@example.com", "role": "buyer", "password": "testpass123"})
-    response = client.post("/users", json={"name": "B", "email": "dup@example.com", "role": "buyer", "password": "testpass123"})
+    client.post("/users", json={**SIGNUP_EXTRA, "name": "A", "email": "dup@example.com", "role": "buyer", "jurisdiction": "United Kingdom", "password": "testpass123"})
+    response = client.post("/users", json={**SIGNUP_EXTRA, "name": "B", "email": "dup@example.com", "role": "buyer", "jurisdiction": "United Kingdom", "password": "testpass123"})
     assert response.status_code == 400
 
 
 def test_create_user_invalid_role_still_rejected(client, db_session):
-    response = client.post("/users", json={"name": "A", "email": "badrole@example.com", "role": "admin", "password": "testpass123"})
+    response = client.post("/users", json={**SIGNUP_EXTRA, "name": "A", "email": "badrole@example.com", "role": "admin", "jurisdiction": "United Kingdom", "password": "testpass123"})
     assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# new required signup fields (Batch B, item 3/13)
+# ---------------------------------------------------------------------------
+
+def test_create_user_without_terms_accepted_rejected_400(client, db_session):
+    response = client.post("/users", json={
+        **SIGNUP_EXTRA,
+        "name": "No Terms", "email": "noterms@example.com", "role": "buyer",
+        "jurisdiction": "United Kingdom", "password": "testpass123",
+        "terms_accepted": False,
+    })
+    assert response.status_code == 400
+
+
+def test_create_user_missing_phone_number_rejected_400(client, db_session):
+    response = client.post("/users", json={
+        **SIGNUP_EXTRA,
+        "name": "No Phone", "email": "nophone@example.com", "role": "buyer",
+        "jurisdiction": "United Kingdom", "password": "testpass123",
+        "phone_number": "",
+    })
+    assert response.status_code == 400
+
+
+def test_create_user_underage_rejected_400(client, db_session):
+    ten_years_ago = date.today().replace(year=date.today().year - 10).isoformat()
+    response = client.post("/users", json={
+        **SIGNUP_EXTRA,
+        "name": "Too Young", "email": "tooyoung@example.com", "role": "buyer",
+        "jurisdiction": "United Kingdom", "password": "testpass123",
+        "date_of_birth": ten_years_ago,
+    })
+    assert response.status_code == 400
+
+
+def test_create_user_stores_phone_and_dob_and_terms_accepted_at(client, db_session):
+    response = client.post("/users", json={
+        **SIGNUP_EXTRA,
+        "name": "Full Signup", "email": "fullsignup@example.com", "role": "buyer",
+        "jurisdiction": "United Kingdom", "password": "testpass123",
+    })
+    assert response.status_code == 200
+    body = response.json()["user"]
+    assert body["phone_number"] == "+1-555-0100"
+    assert body["date_of_birth"] == "1990-01-01"
+    assert body["terms_accepted"] is True
+
+    stored = db_session.query(UserModel).filter(UserModel.email == "fullsignup@example.com").first()
+    assert stored.terms_accepted_at is not None
 
 
 # ---------------------------------------------------------------------------
@@ -120,13 +187,13 @@ def test_create_user_invalid_role_still_rejected(client, db_session):
 # ---------------------------------------------------------------------------
 
 def test_new_user_kyc_status_defaults_not_started(client, db_session):
-    client.post("/users", json={"name": "A", "email": "defaultkyc@example.com", "role": "buyer", "password": "testpass123"})
+    client.post("/users", json={**SIGNUP_EXTRA, "name": "A", "email": "defaultkyc@example.com", "role": "buyer", "jurisdiction": "United Kingdom", "password": "testpass123"})
     stored = db_session.query(UserModel).filter(UserModel.email == "defaultkyc@example.com").first()
     assert stored.kyc_status == "not_started"
 
 
 def test_kyc_status_can_be_set_to_verified(client, db_session):
-    created = client.post("/users", json={"name": "A", "email": "verify@example.com", "role": "buyer", "password": "testpass123"}).json()
+    created = client.post("/users", json={**SIGNUP_EXTRA, "name": "A", "email": "verify@example.com", "role": "buyer", "jurisdiction": "United Kingdom", "password": "testpass123"}).json()
     user_id = created["user"]["id"]
 
     response = client.put(f"/users/{user_id}/kyc-status", params={"status": "verified"})
@@ -138,7 +205,7 @@ def test_kyc_status_can_be_set_to_verified(client, db_session):
 
 
 def test_kyc_status_can_be_set_to_rejected(client, db_session):
-    created = client.post("/users", json={"name": "A", "email": "reject@example.com", "role": "buyer", "password": "testpass123"}).json()
+    created = client.post("/users", json={**SIGNUP_EXTRA, "name": "A", "email": "reject@example.com", "role": "buyer", "jurisdiction": "United Kingdom", "password": "testpass123"}).json()
     user_id = created["user"]["id"]
 
     response = client.put(f"/users/{user_id}/kyc-status", params={"status": "rejected"})
@@ -147,7 +214,7 @@ def test_kyc_status_can_be_set_to_rejected(client, db_session):
 
 
 def test_kyc_status_rejects_invalid_value(client, db_session):
-    created = client.post("/users", json={"name": "A", "email": "invalidkyc@example.com", "role": "buyer", "password": "testpass123"}).json()
+    created = client.post("/users", json={**SIGNUP_EXTRA, "name": "A", "email": "invalidkyc@example.com", "role": "buyer", "jurisdiction": "United Kingdom", "password": "testpass123"}).json()
     user_id = created["user"]["id"]
 
     response = client.put(f"/users/{user_id}/kyc-status", params={"status": "pending"})
@@ -167,6 +234,7 @@ def test_kyc_status_404_for_unknown_user(client, db_session):
 
 def test_buyer_built_through_real_api_clears_kyc_and_jurisdiction_gates(client, db_session):
     created = client.post("/users", json={
+        **SIGNUP_EXTRA,
         "name": "Real Flow Buyer", "email": "realflow@example.com",
         "role": "buyer", "jurisdiction": "United Kingdom", "password": "testpass123",
     }).json()

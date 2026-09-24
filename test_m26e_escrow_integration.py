@@ -165,6 +165,16 @@ def test_create_calls_escrow_with_correct_details(client, db_session, mock_escro
 
 
 def test_create_fails_cleanly_if_escrow_create_raises(client, db_session, mock_escrow):
+    """
+    Updated 2026-09-24 (Batch B, item 6/13 - undefined/timeout provider
+    responses must never be silently treated as if nothing happened): a
+    failed escrow-creation call used to leave zero record of the attempt,
+    which meant nothing stopped a retry from creating a duplicate
+    transaction on Escrow.com. It now persists an "escrow_creation_unconfirmed"
+    settlement record instead, so a retry is blocked (see
+    test_m26_settlement.py's resolve-unconfirmed-creation tests) until an
+    admin manually verifies with Escrow.com and resolves it.
+    """
     seller = make_user(db_session, "1", role="seller")
     buyer = make_user(db_session, "2", role="buyer")
     admin = make_user(db_session, "3", account_type="admin")
@@ -174,8 +184,13 @@ def test_create_fails_cleanly_if_escrow_create_raises(client, db_session, mock_e
 
     resp = client.post("/settlement-records", headers=auth_headers(admin), params={"transaction_id": txn.id})
     assert resp.status_code == 502
-    assert "Could not set up the escrow transaction" in resp.json()["detail"]
-    assert db_session.query(SettlementRecord).count() == 0
+    assert "reconciliation" in resp.json()["detail"]
+
+    record = db_session.query(SettlementRecord).filter(SettlementRecord.transaction_id == txn.id).first()
+    assert record is not None
+    assert record.status == "escrow_creation_unconfirmed"
+    assert record.escrow_provider_reference is None
+
     db_session.refresh(txn)
     assert txn.status == "accepted"
 
@@ -216,6 +231,7 @@ def test_create_falls_back_gracefully_if_agree_not_authorized(client, db_session
 
 
 def test_create_still_fails_cleanly_if_transaction_creation_itself_raises(client, db_session, mock_escrow):
+    """Updated 2026-09-24 alongside the test above - same fix, same reasoning."""
     seller = make_user(db_session, "1", role="seller")
     buyer = make_user(db_session, "2", role="buyer")
     admin = make_user(db_session, "3", account_type="admin")
@@ -225,7 +241,11 @@ def test_create_still_fails_cleanly_if_transaction_creation_itself_raises(client
 
     resp = client.post("/settlement-records", headers=auth_headers(admin), params={"transaction_id": txn.id})
     assert resp.status_code == 502
-    assert db_session.query(SettlementRecord).count() == 0
+
+    record = db_session.query(SettlementRecord).filter(SettlementRecord.transaction_id == txn.id).first()
+    assert record is not None
+    assert record.status == "escrow_creation_unconfirmed"
+
     db_session.refresh(txn)
     assert txn.status == "accepted"
 

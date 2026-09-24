@@ -20,6 +20,13 @@ class User(Base):
     failed_login_attempts = Column(Integer, nullable=False, default=0)
     locked_until = Column(DateTime, nullable=True)
     tokens_valid_since = Column(DateTime, nullable=True)
+    phone_number = Column(String(30), nullable=True)
+    date_of_birth = Column(Date, nullable=True)
+    terms_accepted = Column(Boolean, nullable=False, default=False)
+    terms_accepted_at = Column(DateTime, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    deactivated_at = Column(DateTime, nullable=True)
+    deactivation_reason = Column(String(500), nullable=True)
 
     listings = relationship("Listing", back_populates="seller")
 
