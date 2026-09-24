@@ -20,6 +20,17 @@ class User(Base):
     failed_login_attempts = Column(Integer, nullable=False, default=0)
     locked_until = Column(DateTime, nullable=True)
     tokens_valid_since = Column(DateTime, nullable=True)
+
+    # Seller Financing default/accountability extension (2026-09-24).
+    # FCRA research found that sharing a buyer's payment-default history
+    # WITH OTHER SELLERS would make KEVO a "consumer reporting agency"
+    # under 15 U.S.C. Sec 1681a(f) - real liability exposure. This is a
+    # first-party-only consequence instead: it restricts the buyer's OWN
+    # KEVO account, never a shared credit-style flag visible to anyone
+    # else. Same shape as failed_login_attempts/locked_until above.
+    seller_financing_blocked = Column(Boolean, nullable=False, default=False)
+    seller_financing_blocked_at = Column(DateTime, nullable=True)
+    seller_financing_blocked_reason = Column(String(1000), nullable=True)
     # Batch B accountability extension (2026-09-24): a real, first-party
     # consequence for defaulting on a seller-financing agreement -- KEVO
     # restricting the buyer's OWN account on KEVO's OWN platform, not a
@@ -749,28 +760,24 @@ class AuditLogEntry(Base):
 
 class SellerFinancingAgreement(Base):
     """
-    Batch B Group 3 item 9 (2026-09-24) - Seller Financing, tracking-only.
+    Seller Financing (2026-09-24).
 
-    Dedicated research (the Reves v. Ernst & Young "family resemblance"
-    test for when a note is a security, TILA's business-purpose exemption,
-    and state-by-state usury variation) found this is buildable safely
-    under the same posture already approved for M26B/M26C/M26D: KEVO never
-    originates, funds, holds, or services this credit arrangement. The
-    seller and buyer negotiate their own principal, interest rate, and
-    term directly - the same caller-supplied-terms invariant already
-    enforced on Transaction.agreed_price - and KEVO only records the
-    agreement and its scheduled payments. No money moves through KEVO for
-    the installment payments; that happens directly between buyer and
-    seller, exactly as it would with no platform involved at all. Because
-    the note is a single, privately-negotiated, bilateral instrument tied
-    to one specific already-agreed transaction (never pooled, marketed, or
-    resold to other investors), it lands on the "not a security" side of
-    the Reves test - the same shape as an ordinary seller note in a
-    business sale. Because the purpose is buying an investment asset (not
-    a personal/household loan), it's exempt from TILA/Reg Z by design.
-    Usury limits vary by jurisdiction and are the contracting parties' own
-    responsibility, exactly like KEVO never validates agreed_price against
-    any jurisdiction's pricing rules.
+    Legal grounding: a bilateral, privately-negotiated, non-pooled,
+    non-resold promissory note between two specific parties fails every
+    prong of the Reves "family resemblance" test, so it is "not a
+    security" and doesn't drag in securities registration. TILA's
+    business-purpose exemption (Reg Z Sec 1026.3(a)) applies because these
+    are investment share purchases, not consumer credit. Usury ceilings
+    vary by state/country with no single safe number, so - mirroring the
+    standing agreed_price invariant - KEVO never computes or suggests
+    annual_interest_rate_pct; it only stores what the two parties already
+    agreed off-platform.
+
+    restricts_transfer_until_paid is an explicit, OPT-IN term the parties
+    choose at creation - KEVO enforces it (blocking a new listing for the
+    same position while the agreement is unresolved, see create_listing)
+    only when the parties actually agreed to it, never as a KEVO-invented
+    default restriction.
     """
     __tablename__ = "seller_financing_agreements"
 
@@ -784,23 +791,27 @@ class SellerFinancingAgreement(Base):
     status = Column(String(50), nullable=False, default="active")
     source_reference = Column(String(500), nullable=True)
     created_at = Column(DateTime, nullable=False)
+
+    # Default/accountability extension.
     default_reason = Column(String(1000), nullable=True)
     defaulted_at = Column(DateTime, nullable=True)
     resolution_notes = Column(String(1000), nullable=True)
     resolved_at = Column(DateTime, nullable=True)
 
+    # Protection System extension.
+    restricts_transfer_until_paid = Column(Boolean, nullable=False, default=False)
+
 
 class SellerFinancingPayment(Base):
     """
-    One scheduled installment under a SellerFinancingAgreement. The full
-    schedule is generated deterministically (standard amortization math)
-    from the agreement's own caller-supplied principal/rate/term/frequency
-    at creation time - KEVO computes the arithmetic, never the terms
-    themselves. The seller (who is owed the money) marks a payment
-    received; KEVO never independently confirms money changed hands beyond
-    taking the seller's word, the same "can only attest to what we're
-    told" posture already accepted for buyer-interest/evidence
-    self-submission elsewhere in the app.
+    One scheduled installment of a SellerFinancingAgreement. The private
+    payment-history ledger the Protection System exposes is just a scoped
+    read of this table (buyer/seller on the agreement, or an admin) - no
+    separate ledger table needed.
+
+    reminder_upcoming_sent_at / reminder_overdue_sent_at are idempotency
+    markers for the automatic reminder scan (run_seller_financing_reminder_scan
+    in app.py): each reminder fires at most once per payment, ever.
     """
     __tablename__ = "seller_financing_payments"
 
@@ -813,3 +824,66 @@ class SellerFinancingPayment(Base):
     paid_at = Column(DateTime, nullable=True)
     paid_amount = Column(Numeric(15, 2), nullable=True)
     notes = Column(String(1000), nullable=True)
+
+    reminder_upcoming_sent_at = Column(DateTime, nullable=True)
+    reminder_overdue_sent_at = Column(DateTime, nullable=True)
+
+
+class SellerFinancingReserve(Base):
+    """
+    Seller Financing Protection System - security deposit / reserve
+    tracking (2026-09-24).
+
+    KEVO never moves money (same reasoning as SettlementRecord).
+    required_amount is an explicit term the parties themselves agreed to
+    (seller or admin records it - never computed or suggested by KEVO).
+    funded/released are admin-only attestations of a real-world fact,
+    exactly like SettlementRecord.funds_received. released_to records who
+    the parties themselves decided the reserve went to (buyer or seller) -
+    KEVO records that outcome, it never decides it.
+    """
+    __tablename__ = "seller_financing_reserves"
+
+    id = Column(Integer, primary_key=True)
+    agreement_id = Column(Integer, ForeignKey("seller_financing_agreements.id"), nullable=False, unique=True)
+    required_amount = Column(Numeric(15, 2), nullable=False)
+    status = Column(String(50), nullable=False, default="pending")
+    funded_at = Column(DateTime, nullable=True)
+    funded_reference = Column(String(500), nullable=True)
+    released_at = Column(DateTime, nullable=True)
+    released_to = Column(String(20), nullable=True)
+    released_reference = Column(String(500), nullable=True)
+    notes = Column(String(1000), nullable=True)
+    created_at = Column(DateTime, nullable=False)
+
+
+class SellerFinancingCollateral(Base):
+    """
+    Seller Financing Protection System - collateral / security-interest
+    tracking, "where legally permitted" (2026-09-24).
+
+    UCC Article 9 research found that actually PERFECTING a security
+    interest in investment property requires either a filed UCC-1
+    financing statement or a control agreement with the custodian/issuer -
+    both real legal/administrative acts outside any software system. So
+    this table is deliberately descriptive-only: it records what the
+    parties privately agreed to pledge and its status, exactly as they
+    tell KEVO - it does NOT create, file, or perfect a security interest,
+    and every record starts legal_review_status="not_reviewed" so nothing
+    is treated as a real, enforceable lien until an admin (or the
+    parties' own counsel) has actually looked at it.
+    """
+    __tablename__ = "seller_financing_collateral"
+
+    id = Column(Integer, primary_key=True)
+    agreement_id = Column(Integer, ForeignKey("seller_financing_agreements.id"), nullable=False)
+    description = Column(String(1000), nullable=False)
+    collateral_type = Column(String(100), nullable=False)
+    estimated_value = Column(Numeric(15, 2), nullable=True)
+    status = Column(String(50), nullable=False, default="pledged")
+    legal_review_status = Column(String(50), nullable=False, default="not_reviewed")
+    legal_review_notes = Column(String(1000), nullable=True)
+    source_reference = Column(String(500), nullable=True)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=True)
+    released_at = Column(DateTime, nullable=True)

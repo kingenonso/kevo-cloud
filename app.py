@@ -25,10 +25,11 @@ import calendar
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection, DealAlert, PasswordResetToken, AuditLogEntry, SellerFinancingAgreement, SellerFinancingPayment
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection, DealAlert, PasswordResetToken, AuditLogEntry, SellerFinancingAgreement, SellerFinancingPayment, SellerFinancingReserve, SellerFinancingCollateral
 from models import Transaction
 import escrow_client
 import email_client
+from apscheduler.schedulers.background import BackgroundScheduler
 app = FastAPI(title="KEVO API")
 
 # M28 (first slice) - serves the web app's login + dashboard shell as static
@@ -1789,6 +1790,31 @@ def create_listing(
         raise HTTPException(
             status_code=403,
             detail="You can only create listings for yourself"
+        )
+
+    # Seller Financing Protection System (2026-09-24) - transfer-block hook.
+    # Only enforced when the parties themselves opted into
+    # restricts_transfer_until_paid on the SellerFinancingAgreement that
+    # made this user the buyer of this exact company/asset_type - KEVO
+    # never invents a universal resale restriction, it only enforces the
+    # term the parties actually agreed to.
+    blocking_agreement = (
+        db.query(SellerFinancingAgreement)
+        .join(Transaction, Transaction.id == SellerFinancingAgreement.transaction_id)
+        .join(ListingModel, ListingModel.id == Transaction.listing_id)
+        .filter(
+            Transaction.buyer_id == current_user.id,
+            SellerFinancingAgreement.status == "active",
+            SellerFinancingAgreement.restricts_transfer_until_paid == True,
+            ListingModel.company == listing.company,
+            ListingModel.asset_type == listing.asset_type,
+        )
+        .first()
+    )
+    if blocking_agreement is not None:
+        raise HTTPException(
+            status_code=403,
+            detail="This position can't be relisted until seller financing agreement #{} is fully paid or resolved (you agreed to this restriction when the agreement was created).".format(blocking_agreement.id)
         )
 
     new_listing = ListingModel(
@@ -6511,6 +6537,7 @@ class SellerFinancingAgreementCreate(BaseModel):
     payment_frequency: str = "monthly"
     first_payment_due_date: date
     source_reference: str | None = None
+    restricts_transfer_until_paid: bool = False
 
 
 def _add_months(d: date, months: int) -> date:
@@ -6606,7 +6633,8 @@ def create_seller_financing_agreement(
         first_payment_due_date=payload.first_payment_due_date,
         status="active",
         source_reference=payload.source_reference,
-        created_at=datetime.utcnow()
+        created_at=datetime.utcnow(),
+        restricts_transfer_until_paid=payload.restricts_transfer_until_paid
     )
     db.add(agreement)
     db.commit()
@@ -6815,3 +6843,209 @@ def resolve_seller_financing_default(
     db.commit()
     db.refresh(agreement)
     return agreement
+
+
+# ---------------------------------------------------------------------------
+# Seller Financing Protection System (2026-09-24) - security deposit /
+# reserve tracking. KEVO never moves money (same reasoning as
+# SettlementRecord). required_amount is a party-agreed term (seller or
+# admin records it). funded/released are admin-only attestations of a
+# real-world fact, exactly like SettlementRecord.funds_received.
+# released_to records who the parties themselves decided the reserve went
+# to - KEVO records that outcome, it never decides it.
+# ---------------------------------------------------------------------------
+
+class SellerFinancingReserveCreate(BaseModel):
+    required_amount: float
+    notes: str | None = None
+
+
+@app.post("/seller-financing-agreements/{agreement_id}/reserve")
+def create_seller_financing_reserve(
+    agreement_id: int,
+    payload: SellerFinancingReserveCreate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    agreement = _get_seller_financing_agreement_or_404(agreement_id, db)
+    transaction = _require_seller_financing_party_or_admin(agreement, current_user, db)
+    if current_user.account_type != "admin" and current_user.id != transaction.seller_id:
+        raise HTTPException(status_code=403, detail="Only the seller or an admin can set up the agreed reserve for this agreement")
+    existing = db.query(SellerFinancingReserve).filter(SellerFinancingReserve.agreement_id == agreement_id).first()
+    if existing is not None:
+        raise HTTPException(status_code=403, detail="A reserve already exists for this agreement")
+    if payload.required_amount <= 0:
+        raise HTTPException(status_code=400, detail="required_amount must be greater than zero")
+
+    reserve = SellerFinancingReserve(
+        agreement_id=agreement_id,
+        required_amount=payload.required_amount,
+        status="pending",
+        notes=payload.notes,
+        created_at=datetime.utcnow(),
+    )
+    db.add(reserve)
+    db.commit()
+    db.refresh(reserve)
+    return reserve
+
+
+@app.put("/seller-financing-agreements/{agreement_id}/reserve/fund")
+def fund_seller_financing_reserve(
+    agreement_id: int,
+    funded_reference: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can confirm the reserve was funded")
+    reserve = db.query(SellerFinancingReserve).filter(SellerFinancingReserve.agreement_id == agreement_id).first()
+    if reserve is None:
+        raise HTTPException(status_code=404, detail="No reserve exists for this agreement")
+    if reserve.status != "pending":
+        raise HTTPException(status_code=400, detail="Only a pending reserve can be marked funded")
+    if not funded_reference or not funded_reference.strip():
+        raise HTTPException(status_code=400, detail="funded_reference is required")
+
+    reserve.status = "funded"
+    reserve.funded_at = datetime.utcnow()
+    reserve.funded_reference = funded_reference
+    db.commit()
+    db.refresh(reserve)
+    return reserve
+
+
+@app.put("/seller-financing-agreements/{agreement_id}/reserve/release")
+def release_seller_financing_reserve(
+    agreement_id: int,
+    released_to: str,
+    released_reference: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can confirm the reserve was released")
+    if released_to not in ("buyer", "seller"):
+        raise HTTPException(status_code=400, detail="released_to must be 'buyer' or 'seller'")
+    reserve = db.query(SellerFinancingReserve).filter(SellerFinancingReserve.agreement_id == agreement_id).first()
+    if reserve is None:
+        raise HTTPException(status_code=404, detail="No reserve exists for this agreement")
+    if reserve.status != "funded":
+        raise HTTPException(status_code=400, detail="Only a funded reserve can be released")
+    if not released_reference or not released_reference.strip():
+        raise HTTPException(status_code=400, detail="released_reference is required")
+
+    reserve.status = "released"
+    reserve.released_at = datetime.utcnow()
+    reserve.released_to = released_to
+    reserve.released_reference = released_reference
+    db.commit()
+    db.refresh(reserve)
+    return reserve
+
+
+@app.get("/seller-financing-agreements/{agreement_id}/reserve")
+def get_seller_financing_reserve(agreement_id: int, db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
+    agreement = _get_seller_financing_agreement_or_404(agreement_id, db)
+    _require_seller_financing_party_or_admin(agreement, current_user, db)
+    reserve = db.query(SellerFinancingReserve).filter(SellerFinancingReserve.agreement_id == agreement_id).first()
+    if reserve is None:
+        raise HTTPException(status_code=404, detail="No reserve exists for this agreement")
+    return reserve
+
+
+# ---------------------------------------------------------------------------
+# Seller Financing Protection System (2026-09-24) - collateral /
+# security-interest tracking, "where legally permitted." UCC Article 9
+# research (Sec 9-312/9-314/9-328) found that actually PERFECTING a
+# security interest in investment property requires either a filed UCC-1
+# financing statement or a control agreement with the custodian/issuer -
+# both real legal/administrative acts outside any software system, and
+# jurisdiction-specific outside the US. So this table is deliberately
+# descriptive-only: it records what the parties privately agreed to
+# pledge and its status, exactly as they tell KEVO - it does NOT create,
+# file, or perfect a security interest, and every record starts
+# legal_review_status="not_reviewed" so nothing is treated as a real,
+# enforceable lien until an admin has actually looked at it.
+# ---------------------------------------------------------------------------
+
+class SellerFinancingCollateralCreate(BaseModel):
+    description: str
+    collateral_type: str
+    estimated_value: float | None = None
+    source_reference: str | None = None
+
+
+@app.post("/seller-financing-agreements/{agreement_id}/collateral")
+def create_seller_financing_collateral(
+    agreement_id: int,
+    payload: SellerFinancingCollateralCreate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    agreement = _get_seller_financing_agreement_or_404(agreement_id, db)
+    transaction = _require_seller_financing_party_or_admin(agreement, current_user, db)
+    if not payload.description or not payload.description.strip():
+        raise HTTPException(status_code=400, detail="description is required")
+    if not payload.collateral_type or not payload.collateral_type.strip():
+        raise HTTPException(status_code=400, detail="collateral_type is required")
+
+    collateral = SellerFinancingCollateral(
+        agreement_id=agreement_id,
+        description=payload.description,
+        collateral_type=payload.collateral_type,
+        estimated_value=payload.estimated_value,
+        status="pledged",
+        legal_review_status="not_reviewed",
+        source_reference=payload.source_reference,
+        created_at=datetime.utcnow(),
+    )
+    db.add(collateral)
+    db.commit()
+    db.refresh(collateral)
+    return collateral
+
+
+@app.put("/seller-financing-agreements/{agreement_id}/collateral/{collateral_id}")
+def update_seller_financing_collateral(
+    agreement_id: int,
+    collateral_id: int,
+    status: str | None = None,
+    legal_review_status: str | None = None,
+    legal_review_notes: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can update a collateral record's status or legal review")
+    collateral = db.query(SellerFinancingCollateral).filter(
+        SellerFinancingCollateral.id == collateral_id,
+        SellerFinancingCollateral.agreement_id == agreement_id,
+    ).first()
+    if collateral is None:
+        raise HTTPException(status_code=404, detail="Collateral record not found for this agreement")
+
+    if status is not None:
+        if status not in ("pledged", "released", "disputed"):
+            raise HTTPException(status_code=400, detail="status must be one of: pledged, released, disputed")
+        collateral.status = status
+        if status == "released":
+            collateral.released_at = datetime.utcnow()
+    if legal_review_status is not None:
+        if legal_review_status not in ("not_reviewed", "reviewed_ok", "reviewed_flagged"):
+            raise HTTPException(status_code=400, detail="legal_review_status must be one of: not_reviewed, reviewed_ok, reviewed_flagged")
+        collateral.legal_review_status = legal_review_status
+    if legal_review_notes is not None:
+        collateral.legal_review_notes = legal_review_notes
+    collateral.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(collateral)
+    return collateral
+
+
+@app.get("/seller-financing-agreements/{agreement_id}/collateral")
+def get_seller_financing_collateral(agreement_id: int, db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
+    agreement = _get_seller_financing_agreement_or_404(agreement_id, db)
+    _require_seller_financing_party_or_admin(agreement, current_user, db)
+    return db.query(SellerFinancingCollateral).filter(SellerFinancingCollateral.agreement_id == agreement_id).all()
