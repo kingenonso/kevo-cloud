@@ -2273,6 +2273,42 @@ def update_transaction_status(
                     detail="Not enough quantity available - already committed to other accepted transactions on this listing"
                 )
 
+        # M32 - lock the buyer's demo wallet funds for this transaction. If this
+        # fails (insufficient funds, or the wallet service is unreachable), the
+        # accept action itself must fail too - a transaction can never be marked
+        # accepted while the buyer's committed funds aren't actually locked.
+        lock_amount = float(transaction.quantity) * float(transaction.agreed_price)
+        try:
+            lock_result = wallet_client.lock_funds(
+                transaction.buyer_id, lock_amount, transaction.settlement_currency,
+                transaction.id, f"lock-tx-{transaction.id}"
+            )
+        except RuntimeError as e:
+            log_audit_event(db, current_user.id, "wallet_lock_failed", target_type="transaction", target_id=transaction.id,
+                             detail=str(e))
+            db.commit()
+            raise HTTPException(status_code=502, detail=f"Could not lock buyer funds: {e}")
+        if lock_result.get("status") != "ACTIVE":
+            log_audit_event(db, current_user.id, "wallet_lock_failed", target_type="transaction", target_id=transaction.id,
+                             detail=lock_result.get("failureReason") or "unknown failure")
+            db.commit()
+            raise HTTPException(status_code=400, detail=lock_result.get("failureReason") or "Could not lock buyer funds")
+        log_audit_event(db, current_user.id, "wallet_lock_completed", target_type="transaction", target_id=transaction.id,
+                         detail=f"amount={lock_amount} currency={transaction.settlement_currency}")
+
+    # M32 - a deal falling through after funds were already locked (accepted or
+    # settlement_pending) must release them back to available. This uses the OLD
+    # status (transaction.status, not yet overwritten below) to know a lock exists.
+    if status == "cancelled" and transaction.status in ("accepted", "settlement_pending"):
+        try:
+            wallet_client.release_lock(transaction.buyer_id, transaction.id)
+            log_audit_event(db, current_user.id, "wallet_release_completed", target_type="transaction", target_id=transaction.id)
+        except RuntimeError as e:
+            log_audit_event(db, current_user.id, "wallet_release_failed", target_type="transaction", target_id=transaction.id,
+                             detail=str(e))
+            db.commit()
+            raise HTTPException(status_code=502, detail=f"Could not release buyer funds: {e}")
+
     transaction.status = status
 
     db.commit()
@@ -5628,6 +5664,31 @@ def confirm_shares_transferable(
     return settlement_record
 
 
+def _capture_wallet_funds_for_transaction(transaction, db):
+    """
+    M32 - mirrors a completed real-money settlement into the demo wallet
+    system, so a transaction's buyer/seller see matching activity in
+    their KEVO Funds. This is a fictional-money mirror, not the real
+    settlement - real money already moved through Escrow.com by the time
+    this runs, so a failure here is logged but never blocks or reverses
+    the real settlement that already happened. Safe to call more than
+    once for the same transaction (the wallet service's capture endpoint
+    is idempotent on its own).
+    """
+    if transaction is None:
+        return
+    amount = float(transaction.quantity) * float(transaction.agreed_price)
+    try:
+        wallet_client.capture_lock(transaction.buyer_id, transaction.id, transaction.seller_id)
+        log_audit_event(db, None, "wallet_capture_completed", target_type="transaction", target_id=transaction.id,
+                         detail=f"amount={amount} currency={transaction.settlement_currency}")
+        db.commit()
+    except RuntimeError as e:
+        log_audit_event(db, None, "wallet_capture_failed", target_type="transaction", target_id=transaction.id,
+                         detail=str(e))
+        db.commit()
+
+
 @app.put("/settlement-records/{settlement_record_id}/release-funds")
 def release_settlement_funds(
     settlement_record_id: int,
@@ -5670,6 +5731,8 @@ def release_settlement_funds(
         transaction.status = "completed"
     db.commit()
     db.refresh(settlement_record)
+    if transaction is not None and transaction.status == "completed":
+        _capture_wallet_funds_for_transaction(transaction, db)
     return settlement_record
 
 
@@ -5719,6 +5782,8 @@ def escrow_webhook(payload: dict, db: Session = Depends(get_db)):
         if transaction is not None and transaction.status == "settlement_pending":
             transaction.status = "completed"
         db.commit()
+        if transaction is not None and transaction.status == "completed":
+            _capture_wallet_funds_for_transaction(transaction, db)
     db.refresh(settlement_record)
     return {"status": "ok"}
 
