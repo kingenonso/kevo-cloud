@@ -31,6 +31,7 @@ from models import DueDiligenceChecklistItem
 from models import SecondaryAuctionBid
 from models import ComplianceRuleChangeAlert
 from models import Message
+from models import LiquidityCommitment
 import escrow_client
 import email_client
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -8005,3 +8006,161 @@ def list_messages(
         }
         for m in messages
     ]
+
+
+class LiquidityCommitmentCreate(BaseModel):
+    buyer_id: int
+    company: str
+    asset_type: str
+    min_quantity: int | None = None
+    max_quantity: int | None = None
+    min_price: float | None = None
+    max_price: float | None = None
+    expiration_date: date | None = None
+    conditions: str | None = None
+
+
+def _serialize_commitment(c: LiquidityCommitment):
+    return {
+        "id": c.id,
+        "buyer_id": c.buyer_id,
+        "company": c.company,
+        "asset_type": c.asset_type,
+        "min_quantity": c.min_quantity,
+        "max_quantity": c.max_quantity,
+        "min_price": c.min_price,
+        "max_price": c.max_price,
+        "expiration_date": c.expiration_date,
+        "conditions": c.conditions,
+        "status": c.status,
+        "created_at": c.created_at,
+        "disclaimer": (
+            "This is a non-binding expression of standing interest, not "
+            "an offer to buy and not a binding commitment. KEVO does not "
+            "match or act on it automatically."
+        ),
+    }
+
+
+@app.post("/liquidity-commitments")
+def create_liquidity_commitment(
+    payload: LiquidityCommitmentCreate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    M31 gap-closure item, 2026-09-25 - Liquidity Commitment, the fourth of
+    M31's remaining pieces. Self-submit only (caller must be the named
+    buyer, or admin) - same owner pattern as create_buyer_interest.
+    Deliberately pure data capture: nothing here matches or notifies
+    anyone automatically (confirmed with Eze 2026-09-25, to avoid edging
+    toward resting-limit-order territory the way M16B's original full
+    scope did before it was narrowed).
+    """
+    if current_user.account_type != "admin" and current_user.id != payload.buyer_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only create a liquidity commitment for yourself"
+        )
+
+    if payload.min_quantity is not None and payload.max_quantity is not None:
+        if payload.min_quantity > payload.max_quantity:
+            raise HTTPException(
+                status_code=400,
+                detail="min_quantity cannot be greater than max_quantity"
+            )
+
+    if payload.min_price is not None and payload.max_price is not None:
+        if payload.min_price > payload.max_price:
+            raise HTTPException(
+                status_code=400,
+                detail="min_price cannot be greater than max_price"
+            )
+
+    commitment = LiquidityCommitment(
+        buyer_id=payload.buyer_id,
+        company=payload.company,
+        asset_type=payload.asset_type,
+        min_quantity=payload.min_quantity,
+        max_quantity=payload.max_quantity,
+        min_price=payload.min_price,
+        max_price=payload.max_price,
+        expiration_date=payload.expiration_date,
+        conditions=payload.conditions,
+        status="active",
+        created_at=datetime.utcnow(),
+    )
+    db.add(commitment)
+    db.commit()
+    db.refresh(commitment)
+
+    return _serialize_commitment(commitment)
+
+
+@app.get("/liquidity-commitments")
+def list_liquidity_commitments(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type == "admin":
+        commitments = db.query(LiquidityCommitment).all()
+    else:
+        commitments = db.query(LiquidityCommitment).filter(
+            LiquidityCommitment.buyer_id == current_user.id
+        ).all()
+
+    return [_serialize_commitment(c) for c in commitments]
+
+
+@app.get("/liquidity-commitments/{commitment_id}")
+def get_liquidity_commitment(
+    commitment_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    commitment = db.query(LiquidityCommitment).filter(
+        LiquidityCommitment.id == commitment_id
+    ).first()
+
+    if commitment is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Liquidity commitment not found"
+        )
+
+    if current_user.account_type != "admin" and current_user.id != commitment.buyer_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only view your own liquidity commitments"
+        )
+
+    return _serialize_commitment(commitment)
+
+
+@app.put("/liquidity-commitments/{commitment_id}/withdraw")
+def withdraw_liquidity_commitment(
+    commitment_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    commitment = db.query(LiquidityCommitment).filter(
+        LiquidityCommitment.id == commitment_id
+    ).first()
+
+    if commitment is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Liquidity commitment not found"
+        )
+
+    if current_user.id != commitment.buyer_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only withdraw your own liquidity commitments"
+        )
+
+    commitment.status = "withdrawn"
+    db.commit()
+    db.refresh(commitment)
+
+    return _serialize_commitment(commitment)
