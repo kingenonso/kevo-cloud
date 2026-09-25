@@ -25,7 +25,7 @@ import calendar
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection, DealAlert, PasswordResetToken, AuditLogEntry, SellerFinancingAgreement, SellerFinancingPayment, SellerFinancingReserve, SellerFinancingCollateral
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection, DealAlert, PasswordResetToken, WithdrawalConfirmation, AuditLogEntry, SellerFinancingAgreement, SellerFinancingPayment, SellerFinancingReserve, SellerFinancingCollateral
 from models import Transaction
 from models import DueDiligenceChecklistItem
 from models import SecondaryAuctionBid
@@ -1481,8 +1481,24 @@ class WalletDepositRequest(BaseModel):
 class WalletWithdrawRequest(BaseModel):
     amount: float
     currency: str = "USD"
-    destination_reference: str
+    bank_account_id: int
     idempotency_key: str
+
+
+class ConfirmWithdrawalRequest(BaseModel):
+    token: str
+
+
+class BankAccountRequest(BaseModel):
+    account_holder_name: str
+    bank_name: str
+    account_number: str
+
+
+# Withdrawals at or above this amount require step-up authentication (an
+# emailed confirmation link) before they're processed - spec Section 15.
+# Easy constant to change; not yet configurable per-wallet.
+STEP_UP_WITHDRAWAL_THRESHOLD = 1000.00
 
 
 @app.get("/me/funds")
@@ -1529,10 +1545,54 @@ def withdraw_from_my_wallet(
 ):
     log_audit_event(db, current_user.id, "wallet_withdrawal_requested", target_type="wallet", target_id=current_user.id,
                      detail=f"amount={request.amount} currency={request.currency}")
+
+    if request.amount >= STEP_UP_WITHDRAWAL_THRESHOLD:
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        now = datetime.utcnow()
+
+        confirmation = WithdrawalConfirmation(
+            user_id=current_user.id,
+            token_hash=token_hash,
+            amount=request.amount,
+            currency=request.currency,
+            bank_account_id=request.bank_account_id,
+            idempotency_key=request.idempotency_key,
+            created_at=now,
+            expires_at=now + timedelta(minutes=15),
+            used_at=None
+        )
+        db.add(confirmation)
+        log_audit_event(db, current_user.id, "wallet_withdrawal_confirmation_sent", target_type="wallet", target_id=current_user.id,
+                         detail=f"amount={request.amount} currency={request.currency}")
+        db.commit()
+
+        confirm_link = f"https://kevo.example/confirm-withdrawal?token={raw_token}"
+        try:
+            email_client.send_email(
+                current_user.email,
+                "Confirm your KEVO withdrawal",
+                f"""You requested a withdrawal of {request.amount} {request.currency} from your KEVO wallet.
+
+Click here to confirm: {confirm_link}
+
+This link expires in 15 minutes and can only be used once. If you didn't request this, please secure your account immediately and contact support."""
+            )
+        except RuntimeError as e:
+            log_audit_event(db, current_user.id, "wallet_withdrawal_confirmation_email_failed", target_type="wallet", target_id=current_user.id,
+                             detail=str(e))
+            raise HTTPException(status_code=502, detail=f"Could not send confirmation email: {e}")
+
+        return {
+            "status": "CONFIRMATION_REQUIRED",
+            "message": "This withdrawal is above the confirmation threshold. Check your email to confirm it.",
+            "expires_in_minutes": 15
+        }
+
     try:
         result = wallet_client.withdraw(
             current_user.id, request.amount, request.currency,
-            request.destination_reference, request.idempotency_key
+            request.bank_account_id, request.idempotency_key
         )
     except RuntimeError as e:
         log_audit_event(db, current_user.id, "wallet_withdrawal_failed", target_type="wallet", target_id=current_user.id,
@@ -1547,6 +1607,116 @@ def withdraw_from_my_wallet(
                          detail=result.get("failureReason") or "unknown failure")
         raise HTTPException(status_code=400, detail=result.get("failureReason") or "Withdrawal failed")
 
+    return result
+
+
+@app.post("/me/funds/withdraw/confirm")
+def confirm_my_withdrawal(
+    request: ConfirmWithdrawalRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    token_hash = hashlib.sha256(request.token.encode()).hexdigest()
+    confirmation = db.query(WithdrawalConfirmation).filter(WithdrawalConfirmation.token_hash == token_hash).first()
+
+    if confirmation is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired confirmation token")
+
+    if confirmation.used_at is not None:
+        raise HTTPException(status_code=400, detail="Invalid or expired confirmation token")
+
+    if confirmation.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Invalid or expired confirmation token")
+
+    if confirmation.user_id != current_user.id:
+        raise HTTPException(status_code=400, detail="Invalid or expired confirmation token")
+
+    try:
+        result = wallet_client.withdraw(
+            current_user.id, float(confirmation.amount), confirmation.currency,
+            confirmation.bank_account_id, confirmation.idempotency_key
+        )
+    except RuntimeError as e:
+        log_audit_event(db, current_user.id, "wallet_withdrawal_failed", target_type="wallet", target_id=current_user.id,
+                         detail=str(e))
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+
+    confirmation.used_at = datetime.utcnow()
+
+    if result.get("status") == "COMPLETED":
+        log_audit_event(db, current_user.id, "wallet_withdrawal_completed", target_type="wallet", target_id=current_user.id,
+                         detail=f"amount={confirmation.amount} currency={confirmation.currency} (confirmed)")
+        db.commit()
+    else:
+        log_audit_event(db, current_user.id, "wallet_withdrawal_failed", target_type="wallet", target_id=current_user.id,
+                         detail=result.get("failureReason") or "unknown failure")
+        db.commit()
+        raise HTTPException(status_code=400, detail=result.get("failureReason") or "Withdrawal failed")
+
+    return result
+
+
+@app.post("/me/bank-accounts")
+def add_my_bank_account(
+    request: BankAccountRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    log_audit_event(db, current_user.id, "bank_account_add_initiated", target_type="wallet", target_id=current_user.id,
+                     detail=f"bank_name={request.bank_name}")
+    try:
+        result = wallet_client.add_bank_account(
+            current_user.id, request.account_holder_name, request.bank_name, request.account_number
+        )
+    except RuntimeError as e:
+        log_audit_event(db, current_user.id, "bank_account_add_failed", target_type="wallet", target_id=current_user.id,
+                         detail=str(e))
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+
+    log_audit_event(db, current_user.id, "bank_account_added", target_type="wallet", target_id=current_user.id,
+                     detail=f"bank_account_id={result.get('id')} bank_name={request.bank_name}")
+    return result
+
+
+@app.get("/me/bank-accounts")
+def list_my_bank_accounts(
+    current_user: UserModel = Depends(get_current_user)
+):
+    try:
+        return wallet_client.list_bank_accounts(current_user.id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+
+
+@app.post("/me/bank-accounts/{bank_account_id}/verify")
+def verify_my_bank_account(
+    bank_account_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    try:
+        result = wallet_client.verify_bank_account(current_user.id, bank_account_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+
+    log_audit_event(db, current_user.id, "bank_account_verified", target_type="wallet", target_id=current_user.id,
+                     detail=f"bank_account_id={bank_account_id}")
+    return result
+
+
+@app.post("/me/bank-accounts/{bank_account_id}/disable")
+def disable_my_bank_account(
+    bank_account_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    try:
+        result = wallet_client.disable_bank_account(current_user.id, bank_account_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+
+    log_audit_event(db, current_user.id, "bank_account_disabled", target_type="wallet", target_id=current_user.id,
+                     detail=f"bank_account_id={bank_account_id}")
     return result
 
 

@@ -76,17 +76,58 @@ def deposit(kevo_user_id: int, amount: float, currency: str, idempotency_key: st
     return response.json()
 
 
-def withdraw(kevo_user_id: int, amount: float, currency: str, destination_reference: str, idempotency_key: str) -> dict:
-    """Withdraws from a user's wallet to a destination reference (a stand-in for a verified bank account - spec Section 14, not yet built)."""
+def withdraw(kevo_user_id: int, amount: float, currency: str, bank_account_id: int, idempotency_key: str) -> dict:
+    """Withdraws from a user's wallet to one of that user's own verified bank accounts (spec Section 14)."""
     payload = {
         "amount": amount,
         "currency": currency,
-        "destinationReference": destination_reference,
+        "bankAccountId": bank_account_id,
         "idempotencyKey": idempotency_key,
     }
     response = _check(requests.post(
         f"{_base_url()}/internal/wallets/{kevo_user_id}/withdrawals",
         json=payload, headers=_headers(), timeout=15
+    ))
+    return response.json()
+
+
+def add_bank_account(kevo_user_id: int, account_holder_name: str, bank_name: str, account_number: str) -> dict:
+    """Adds a bank account to a user's wallet. Only a last-four stand-in and a demo provider token are ever stored - the real account number is discarded after this call."""
+    payload = {
+        "accountHolderName": account_holder_name,
+        "bankName": bank_name,
+        "accountNumber": account_number,
+    }
+    response = _check(requests.post(
+        f"{_base_url()}/internal/wallets/{kevo_user_id}/bank-accounts",
+        json=payload, headers=_headers(), timeout=15
+    ))
+    return response.json()
+
+
+def list_bank_accounts(kevo_user_id: int) -> list:
+    """Lists a user's bank accounts (masked - last four digits only, never the real account number)."""
+    response = _check(requests.get(
+        f"{_base_url()}/internal/wallets/{kevo_user_id}/bank-accounts",
+        headers=_headers(), timeout=15
+    ))
+    return response.json()
+
+
+def verify_bank_account(kevo_user_id: int, bank_account_id: int) -> dict:
+    """Demo verification step for a bank account (spec Section 14; a real integration would replace this with micro-deposits or an instant-verification provider)."""
+    response = _check(requests.post(
+        f"{_base_url()}/internal/wallets/{kevo_user_id}/bank-accounts/{bank_account_id}/verify",
+        headers=_headers(), timeout=15
+    ))
+    return response.json()
+
+
+def disable_bank_account(kevo_user_id: int, bank_account_id: int) -> dict:
+    """Disables a bank account so it can no longer receive withdrawals."""
+    response = _check(requests.post(
+        f"{_base_url()}/internal/wallets/{kevo_user_id}/bank-accounts/{bank_account_id}/disable",
+        headers=_headers(), timeout=15
     ))
     return response.json()
 
