@@ -982,3 +982,30 @@ class ComplianceRuleChangeAlert(Base):
     is_read = Column(Boolean, nullable=False, default=False)
     read_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False)
+
+
+class Message(Base):
+    """
+    M31 gap-closure item, 2026-09-25 - the messaging layer for Compliant-
+    Communication Gating, the second of M31's remaining pieces. KEVO had
+    no messaging/communication feature of any kind before this (confirmed
+    by M24's own earlier audit) - this is a deliberately minimal, per-
+    transaction thread, not an open inbox or unsolicited-contact system.
+    A message can only exist against a real Transaction, and only that
+    transaction's buyer or seller can send or read one - the same scoping
+    boundary Transaction itself already enforces under M19.
+
+    Sending is gated (see _check_buyer_communication_eligible() in app.py):
+    unlike every other KEVO feature, which is deliberately informational-
+    only and never blocks anything, this is a named, deliberate exception -
+    a message cannot be sent while the transaction's buyer fails a narrow,
+    buyer-specific eligibility check (KYC verification + investor
+    classification), regardless of which party is trying to send it.
+    """
+    __tablename__ = "messages"
+
+    id = Column(Integer, primary_key=True)
+    transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=False)
+    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    body = Column(String(2000), nullable=False)
+    created_at = Column(DateTime, nullable=False)
