@@ -33,6 +33,7 @@ from models import ComplianceRuleChangeAlert
 from models import Message
 from models import LiquidityCommitment
 import escrow_client
+import wallet_client
 import email_client
 from apscheduler.schedulers.background import BackgroundScheduler
 app = FastAPI(title="KEVO API")
@@ -1469,6 +1470,84 @@ def get_my_profile(
         "jurisdiction": current_user.jurisdiction,
         "account_type": current_user.account_type
     }
+
+
+class WalletDepositRequest(BaseModel):
+    amount: float
+    currency: str = "USD"
+    idempotency_key: str
+
+
+class WalletWithdrawRequest(BaseModel):
+    amount: float
+    currency: str = "USD"
+    destination_reference: str
+    idempotency_key: str
+
+
+@app.get("/me/funds")
+def get_my_funds(
+    current_user: UserModel = Depends(get_current_user)
+):
+    try:
+        return wallet_client.get_wallet(current_user.id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+
+
+@app.post("/me/funds/deposit")
+def deposit_to_my_wallet(
+    request: WalletDepositRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    log_audit_event(db, current_user.id, "wallet_deposit_initiated", target_type="wallet", target_id=current_user.id,
+                     detail=f"amount={request.amount} currency={request.currency}")
+    try:
+        result = wallet_client.deposit(current_user.id, request.amount, request.currency, request.idempotency_key)
+    except RuntimeError as e:
+        log_audit_event(db, current_user.id, "wallet_deposit_failed", target_type="wallet", target_id=current_user.id,
+                         detail=str(e))
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+
+    if result.get("status") == "COMPLETED":
+        log_audit_event(db, current_user.id, "wallet_deposit_completed", target_type="wallet", target_id=current_user.id,
+                         detail=f"amount={request.amount} currency={request.currency}")
+    else:
+        log_audit_event(db, current_user.id, "wallet_deposit_failed", target_type="wallet", target_id=current_user.id,
+                         detail=result.get("failureReason") or "unknown failure")
+        raise HTTPException(status_code=400, detail=result.get("failureReason") or "Deposit failed")
+
+    return result
+
+
+@app.post("/me/funds/withdraw")
+def withdraw_from_my_wallet(
+    request: WalletWithdrawRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    log_audit_event(db, current_user.id, "wallet_withdrawal_requested", target_type="wallet", target_id=current_user.id,
+                     detail=f"amount={request.amount} currency={request.currency}")
+    try:
+        result = wallet_client.withdraw(
+            current_user.id, request.amount, request.currency,
+            request.destination_reference, request.idempotency_key
+        )
+    except RuntimeError as e:
+        log_audit_event(db, current_user.id, "wallet_withdrawal_failed", target_type="wallet", target_id=current_user.id,
+                         detail=str(e))
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+
+    if result.get("status") == "COMPLETED":
+        log_audit_event(db, current_user.id, "wallet_withdrawal_completed", target_type="wallet", target_id=current_user.id,
+                         detail=f"amount={request.amount} currency={request.currency}")
+    else:
+        log_audit_event(db, current_user.id, "wallet_withdrawal_failed", target_type="wallet", target_id=current_user.id,
+                         detail=result.get("failureReason") or "unknown failure")
+        raise HTTPException(status_code=400, detail=result.get("failureReason") or "Withdrawal failed")
+
+    return result
 
 
 @app.put("/users/{user_id}/kyc-status")
