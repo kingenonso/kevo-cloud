@@ -10,7 +10,11 @@ def make_user(name_suffix, role="buyer"):
     email = f"live{suffix}{name_suffix}@example.com"
     r = requests.post(f"{BASE}/users", json={
         "name": f"Live {name_suffix}", "email": email, "role": role,
-        "password": "testpass123"
+        "password": "testpass123",
+        "phone_number": "+2348000000000",
+        "date_of_birth": "1990-01-01",
+        "jurisdiction": "NG",
+        "terms_accepted": True,
     })
     assert r.status_code == 200, r.text
     user = r.json()["user"]
@@ -26,6 +30,11 @@ def make_admin():
     admin_row = UserModel(
         name="Live Admin", email=email, role="admin", account_type="admin",
         kyc_status="not_started", hashed_password=hash_password("testpass123"),
+        phone_number="+2348000000001",
+        date_of_birth=date(1990, 1, 1),
+        jurisdiction="NG",
+        terms_accepted=True,
+        terms_accepted_at=datetime.utcnow(),
     )
     db.add(admin_row)
     db.commit()
@@ -57,6 +66,10 @@ assert r.status_code == 200, r.text
 txn = r.json()["transaction"]
 print("Transaction created id=%s status=%s" % (txn["id"], txn["status"]))
 
+r = requests.patch(f"{BASE}/transactions/{txn['id']}/status", headers=seller["headers"], params={"status": "accepted"})
+assert r.status_code == 200, r.text
+print("Transaction accepted, response:", r.text)
+
 first_due = date.today() + timedelta(days=1)
 r = requests.post(f"{BASE}/seller-financing-agreements", headers=seller["headers"], json={
     "transaction_id": txn["id"], "principal_amount": 3000.0, "annual_interest_rate_pct": 0,
@@ -65,7 +78,13 @@ r = requests.post(f"{BASE}/seller-financing-agreements", headers=seller["headers
 })
 assert r.status_code == 200, r.text
 agreement = r.json()
-print("SF Agreement created id=%s status=%s restricts_transfer=%s" % (agreement["id"], agreement["status"], agreement["restricts_transfer_until_paid"]))
+print("SF Agreement created id=%s status=%s (API response keys: %s)" % (agreement["id"], agreement["status"], sorted(agreement.keys())))
+
+db_check = SessionLocal()
+from models import SellerFinancingAgreement as _SFA
+agreement_row = db_check.query(_SFA).filter(_SFA.id == agreement["id"]).first()
+print("DB row restricts_transfer_until_paid =", agreement_row.restricts_transfer_until_paid)
+db_check.close()
 
 r = requests.get(f"{BASE}/seller-financing-agreements/{agreement['id']}/payments", headers=buyer["headers"])
 payments = r.json()
@@ -137,7 +156,7 @@ print("Payment 2 after reminder scan: status=%s" % p2_after.status)
 db.close()
 
 r = requests.put(f"{BASE}/seller-financing-agreements/{agreement['id']}/default", headers=seller["headers"], params={
-    "default_reason": "Buyer stopped paying after installment 1"
+    "reason": "Buyer stopped paying after installment 1"
 })
 assert r.status_code == 200, r.text
 print("Agreement marked defaulted status=%s" % r.json()["status"])

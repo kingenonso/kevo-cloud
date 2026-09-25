@@ -1,18 +1,14 @@
 nohup: ignoring input
-INFO:     Started server process [320080]
+INFO:     Started server process [558399]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-INFO:     127.0.0.1:44974 - "POST /settlement-records?transaction_id=16 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:40048 - "GET /app/tender-offer.html HTTP/1.1" 304 Not Modified
-INFO:     127.0.0.1:40048 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:40054 - "GET /tender-offer-programs HTTP/1.1" 200 OK
-INFO:     127.0.0.1:40048 - "GET /tender-offer-elections HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56722 - "GET /app/ledger.html HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56722 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56722 - "GET /app/funding.html HTTP/1.1" 304 Not Modified
-INFO:     127.0.0.1:56722 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56722 - "GET /option-funding-referrals HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:49280 - "POST /users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49286 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49290 - "POST /users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49294 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49310 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49318 - "POST /listings HTTP/1.1" 500 Internal Server Error
 ERROR:    Exception in ASGI application
 Traceback (most recent call last):
   File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1969, in _exec_single_context
@@ -21,8 +17,8 @@ Traceback (most recent call last):
     cursor.execute(statement, parameters)
   File "/home/king/KEVO/.venv/lib/python3.12/site-packages/psycopg/cursor.py", line 117, in execute
     raise ex.with_traceback(None)
-psycopg.errors.UndefinedColumn: column option_funding_referrals.escrow_release_initiated does not exist
-LINE 1: ...eferrals.notes AS option_funding_referrals_notes, option_fun...
+psycopg.errors.UndefinedColumn: column seller_financing_agreements.restricts_transfer_until_paid does not exist
+LINE 1: ...ed_at AS seller_financing_agreements_resolved_at, seller_fin...
                                                              ^
 
 The above exception was the direct cause of the following exception:
@@ -45,7 +41,7 @@ Traceback (most recent call last):
   File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 193, in __call__
     response = await self.dispatch_func(request, call_next)
                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/app.py", line 104, in add_security_headers
+  File "/home/king/KEVO/app.py", line 110, in add_security_headers
     response = await call_next(request)
                ^^^^^^^^^^^^^^^^^^^^^^^^
   File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 168, in call_next
@@ -105,12 +101,12 @@ Traceback (most recent call last):
   File "/home/king/KEVO/.venv/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 1033, in run
     result = context.run(func, *args)
              ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/app.py", line 4951, in get_option_funding_referrals
-    if current_user.account_type != "admin":
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/query.py", line 2711, in all
-    return self._iter().all()  # type: ignore
-           ^^^^^^^^^^^^
+  File "/home/king/KEVO/app.py", line 1812, in create_listing
+    .first()
+     ^^^^^^^
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/query.py", line 2766, in first
+    return self.limit(1)._iter().first()  # type: ignore
+           ^^^^^^^^^^^^^^^^^^^^^
   File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/query.py", line 2864, in _iter
     result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
                                                   ^^^^^^^^^^^^^^^^^^^^^
@@ -145,36 +141,34 @@ Traceback (most recent call last):
     cursor.execute(statement, parameters)
   File "/home/king/KEVO/.venv/lib/python3.12/site-packages/psycopg/cursor.py", line 117, in execute
     raise ex.with_traceback(None)
-sqlalchemy.exc.ProgrammingError: (psycopg.errors.UndefinedColumn) column option_funding_referrals.escrow_release_initiated does not exist
-LINE 1: ...eferrals.notes AS option_funding_referrals_notes, option_fun...
+sqlalchemy.exc.ProgrammingError: (psycopg.errors.UndefinedColumn) column seller_financing_agreements.restricts_transfer_until_paid does not exist
+LINE 1: ...ed_at AS seller_financing_agreements_resolved_at, seller_fin...
                                                              ^
-[SQL: SELECT option_funding_referrals.id AS option_funding_referrals_id, option_funding_referrals.holder_id AS option_funding_referrals_holder_id, option_funding_referrals.company AS option_funding_referrals_company, option_funding_referrals.notes AS option_funding_referrals_notes, option_funding_referrals.escrow_release_initiated AS option_funding_referrals_escrow_release_initiated, option_funding_referrals.status AS option_funding_referrals_status, option_funding_referrals.referred_provider_name AS option_funding_referrals_referred_provider_name, option_funding_referrals.referred_at AS option_funding_referrals_referred_at, option_funding_referrals.closed_at AS option_funding_referrals_closed_at 
-FROM option_funding_referrals 
-WHERE option_funding_referrals.holder_id = %(holder_id_1)s::INTEGER]
-[parameters: {'holder_id_1': 60}]
+[SQL: SELECT seller_financing_agreements.id AS seller_financing_agreements_id, seller_financing_agreements.transaction_id AS seller_financing_agreements_transaction_id, seller_financing_agreements.principal_amount AS seller_financing_agreements_principal_amount, seller_financing_agreements.annual_interest_rate_pct AS seller_financing_agreements_annual_interest_rate_pct, seller_financing_agreements.term_months AS seller_financing_agreements_term_months, seller_financing_agreements.payment_frequency AS seller_financing_agreements_payment_frequency, seller_financing_agreements.first_payment_due_date AS seller_financing_agreements_first_payment_due_date, seller_financing_agreements.status AS seller_financing_agreements_status, seller_financing_agreements.source_reference AS seller_financing_agreements_source_reference, seller_financing_agreements.created_at AS seller_financing_agreements_created_at, seller_financing_agreements.default_reason AS seller_financing_agreements_default_reason, seller_financing_agreements.defaulted_at AS seller_financing_agreements_defaulted_at, seller_financing_agreements.resolution_notes AS seller_financing_agreements_resolution_notes, seller_financing_agreements.resolved_at AS seller_financing_agreements_resolved_at, seller_financing_agreements.restricts_transfer_until_paid AS seller_financing_agreements_restricts_transfer_until_paid 
+FROM seller_financing_agreements JOIN transactions ON transactions.id = seller_financing_agreements.transaction_id JOIN listings ON listings.id = transactions.listing_id 
+WHERE transactions.buyer_id = %(buyer_id_1)s::INTEGER AND seller_financing_agreements.status = %(status_1)s::VARCHAR AND seller_financing_agreements.restricts_transfer_until_paid = true AND listings.company = %(company_1)s::VARCHAR AND listings.asset_type = %(asset_type_1)s::VARCHAR 
+ LIMIT %(param_1)s::INTEGER]
+[parameters: {'buyer_id_1': 89, 'status_1': 'active', 'company_1': 'LiveCo554820', 'asset_type_1': 'Private Shares', 'param_1': 1}]
 (Background on this error at: https://sqlalche.me/e/20/f405)
-INFO:     127.0.0.1:56728 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56728 - "GET /app/market.html HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56728 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56728 - "GET /app/kyc.html HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56728 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56728 - "GET /kyc-facts/user/60 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49892 - "GET /app/listings.html HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49892 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49892 - "GET /listings HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49892 - "GET /app/rofr.html HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49892 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49892 - "GET /rofr-requests HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:47130 - "POST /users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47138 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47142 - "POST /users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47152 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47164 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47170 - "POST /listings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47184 - "POST /transactions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47194 - "PATCH /transactions/24/status?status=accepted HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47200 - "POST /seller-financing-agreements HTTP/1.1" 500 Internal Server Error
 ERROR:    Exception in ASGI application
 Traceback (most recent call last):
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1969, in _exec_single_context
-    self.dialect.do_execute(
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2127, in _exec_insertmany_context
+    dialect.do_execute(
   File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
     cursor.execute(statement, parameters)
   File "/home/king/KEVO/.venv/lib/python3.12/site-packages/psycopg/cursor.py", line 117, in execute
     raise ex.with_traceback(None)
-psycopg.errors.UndefinedColumn: column rofr_requests.escrow_release_initiated does not exist
-LINE 1: ...s.response_notes AS rofr_requests_response_notes, rofr_reque...
+psycopg.errors.UndefinedColumn: column "reminder_upcoming_sent_at" of relation "seller_financing_payments" does not exist
+LINE 1: ... amount_due, status, paid_at, paid_amount, notes, reminder_u...
                                                              ^
 
 The above exception was the direct cause of the following exception:
@@ -197,7 +191,7 @@ Traceback (most recent call last):
   File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 193, in __call__
     response = await self.dispatch_func(request, call_next)
                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/app.py", line 104, in add_security_headers
+  File "/home/king/KEVO/app.py", line 110, in add_security_headers
     response = await call_next(request)
                ^^^^^^^^^^^^^^^^^^^^^^^^
   File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 168, in call_next
@@ -257,652 +251,105 @@ Traceback (most recent call last):
   File "/home/king/KEVO/.venv/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 1033, in run
     result = context.run(func, *args)
              ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/app.py", line 4370, in get_rofr_requests
-    if status not in ("approved", "waived", "exercised"):
+  File "/home/king/KEVO/app.py", line 6658, in create_seller_financing_agreement
+    db.commit()
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2035, in commit
+    trans.commit(_to_root=True)
+  File "<string>", line 2, in commit
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/state_changes.py", line 137, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 1316, in commit
+    self._prepare_impl()
+  File "<string>", line 2, in _prepare_impl
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/state_changes.py", line 137, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 1290, in _prepare_impl
+    self.session.flush()
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4353, in flush
+    self._flush(objects)
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4488, in _flush
+    with util.safe_reraise():
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py", line 122, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4449, in _flush
+    flush_context.execute()
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py", line 465, in execute
+    rec.execute(self)
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py", line 641, in execute
+    util.preloaded.orm_persistence.save_obj(
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py", line 94, in save_obj
+    _emit_insert_statements(
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py", line 1144, in _emit_insert_statements
+    result = connection.execute(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1421, in execute
+    return meth(
+           ^^^^^
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/sql/elements.py", line 526, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1643, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1846, in _execute_context
+    return self._exec_insertmany_context(dialect, context)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/query.py", line 2711, in all
-    return self._iter().all()  # type: ignore
-           ^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/query.py", line 2864, in _iter
-    result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
-                                                  ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2373, in execute
-    return self._execute_internal(
-           ^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2271, in _execute_internal
-    result: Result[Any] = compile_state_cls.orm_execute_statement(
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/context.py", line 306, in orm_execute_statement
-    result = conn.execute(
-             ^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1421, in execute
-    return meth(
-           ^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/sql/elements.py", line 526, in _execute_on_connection
-    return connection._execute_clauseelement(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1643, in _execute_clauseelement
-    ret = self._execute_context(
-          ^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1848, in _execute_context
-    return self._exec_single_context(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1988, in _exec_single_context
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2135, in _exec_insertmany_context
     self._handle_dbapi_exception(
   File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2365, in _handle_dbapi_exception
     raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1969, in _exec_single_context
-    self.dialect.do_execute(
+  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2127, in _exec_insertmany_context
+    dialect.do_execute(
   File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
     cursor.execute(statement, parameters)
   File "/home/king/KEVO/.venv/lib/python3.12/site-packages/psycopg/cursor.py", line 117, in execute
     raise ex.with_traceback(None)
-sqlalchemy.exc.ProgrammingError: (psycopg.errors.UndefinedColumn) column rofr_requests.escrow_release_initiated does not exist
-LINE 1: ...s.response_notes AS rofr_requests_response_notes, rofr_reque...
+sqlalchemy.exc.ProgrammingError: (psycopg.errors.UndefinedColumn) column "reminder_upcoming_sent_at" of relation "seller_financing_payments" does not exist
+LINE 1: ... amount_due, status, paid_at, paid_amount, notes, reminder_u...
                                                              ^
-[SQL: SELECT rofr_requests.id AS rofr_requests_id, rofr_requests.transaction_id AS rofr_requests_transaction_id, rofr_requests.transferability_rule_id AS rofr_requests_transferability_rule_id, rofr_requests.status AS rofr_requests_status, rofr_requests.response_notes AS rofr_requests_response_notes, rofr_requests.escrow_release_initiated AS rofr_requests_escrow_release_initiated, rofr_requests.responded_at AS rofr_requests_responded_at, rofr_requests.source_reference AS rofr_requests_source_reference 
-FROM rofr_requests 
-WHERE rofr_requests.transaction_id IN (%(transaction_id_1_1)s::INTEGER, %(transaction_id_1_2)s::INTEGER)]
-[parameters: {'transaction_id_1_1': 18, 'transaction_id_1_2': 19}]
+[SQL: INSERT INTO seller_financing_payments (agreement_id, installment_number, due_date, amount_due, status, paid_at, paid_amount, notes, reminder_upcoming_sent_at, reminder_overdue_sent_at) SELECT p0::INTEGER, p1::INTEGER, p2::DATE, p3::NUMERIC(15, 2), p4 ... 1267 characters truncated ... ) ORDER BY sen_counter RETURNING seller_financing_payments.id, seller_financing_payments.id AS id__1]
+[parameters: {'agreement_id__0': 4, 'reminder_overdue_sent_at__0': None, 'due_date__0': datetime.date(2026, 9, 25), 'paid_amount__0': None, 'paid_at__0': None, 'installment_number__0': 1, 'notes__0': None, 'reminder_upcoming_sent_at__0': None, 'amount_due__0': 1000.0, 'status__0': 'pending', 'agreement_id__1': 4, 'reminder_overdue_sent_at__1': None, 'due_date__1': datetime.date(2026, 10, 25), 'paid_amount__1': None, 'paid_at__1': None, 'installment_number__1': 2, 'notes__1': None, 'reminder_upcoming_sent_at__1': None, 'amount_due__1': 1000.0, 'status__1': 'pending', 'agreement_id__2': 4, 'reminder_overdue_sent_at__2': None, 'due_date__2': datetime.date(2026, 11, 25), 'paid_amount__2': None, 'paid_at__2': None, 'installment_number__2': 3, 'notes__2': None, 'reminder_upcoming_sent_at__2': None, 'amount_due__2': 1000.0, 'status__2': 'pending'}]
 (Background on this error at: https://sqlalche.me/e/20/f405)
-INFO:     127.0.0.1:33004 - "GET /app/rofr.html HTTP/1.1" 304 Not Modified
-INFO:     127.0.0.1:33004 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:33004 - "GET /rofr-requests HTTP/1.1" 500 Internal Server Error
-ERROR:    Exception in ASGI application
-Traceback (most recent call last):
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1969, in _exec_single_context
-    self.dialect.do_execute(
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
-    cursor.execute(statement, parameters)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/psycopg/cursor.py", line 117, in execute
-    raise ex.with_traceback(None)
-psycopg.errors.UndefinedColumn: column rofr_requests.escrow_release_initiated does not exist
-LINE 1: ...s.response_notes AS rofr_requests_response_notes, rofr_reque...
-                                                             ^
-
-The above exception was the direct cause of the following exception:
-
-Traceback (most recent call last):
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/uvicorn/protocols/http/h11_impl.py", line 416, in run_asgi
-    result = await app(  # type: ignore[func-returns-value]
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 63, in __call__
-    return await self.app(scope, receive, send)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/applications.py", line 1163, in __call__
-    await super().__call__(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/applications.py", line 96, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
-    raise exc
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
-    await self.app(scope, receive, _send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 193, in __call__
-    response = await self.dispatch_func(request, call_next)
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/app.py", line 104, in add_security_headers
-    response = await call_next(request)
-               ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 168, in call_next
-    raise app_exc from app_exc.__cause__ or app_exc.__context__
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 144, in coro
-    await self.app(scope, receive_or_disconnect, send_no_error)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 193, in __call__
-    response = await self.dispatch_func(request, call_next)
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/slowapi/middleware.py", line 136, in dispatch
-    response = await call_next(request)
-               ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 168, in call_next
-    raise app_exc from app_exc.__cause__ or app_exc.__context__
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 144, in coro
-    await self.app(scope, receive_or_disconnect, send_no_error)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
-    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
-    await self.app(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/routing.py", line 670, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2734, in app
-    await route.handle(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1281, in handle
-    await super().handle(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/routing.py", line 280, in handle
-    await self.app(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 158, in app
-    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 144, in app
-    response = await f(request)
-               ^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 706, in app
-    raw_response = await run_endpoint_function(
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 354, in run_endpoint_function
-    return await run_in_threadpool(dependant.call, **values)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/concurrency.py", line 34, in run_in_threadpool
-    return await anyio.to_thread.run_sync(func)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/anyio/to_thread.py", line 65, in run_sync
-    return await get_async_backend().run_sync_in_worker_thread(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 2641, in run_sync_in_worker_thread
-    return await future
-           ^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 1033, in run
-    result = context.run(func, *args)
-             ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/app.py", line 4370, in get_rofr_requests
-    "summary": risk_radar["summary"],
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/query.py", line 2711, in all
-    return self._iter().all()  # type: ignore
-           ^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/query.py", line 2864, in _iter
-    result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
-                                                  ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2373, in execute
-    return self._execute_internal(
-           ^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2271, in _execute_internal
-    result: Result[Any] = compile_state_cls.orm_execute_statement(
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/context.py", line 306, in orm_execute_statement
-    result = conn.execute(
-             ^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1421, in execute
-    return meth(
-           ^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/sql/elements.py", line 526, in _execute_on_connection
-    return connection._execute_clauseelement(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1643, in _execute_clauseelement
-    ret = self._execute_context(
-          ^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1848, in _execute_context
-    return self._exec_single_context(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1988, in _exec_single_context
-    self._handle_dbapi_exception(
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2365, in _handle_dbapi_exception
-    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1969, in _exec_single_context
-    self.dialect.do_execute(
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
-    cursor.execute(statement, parameters)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/psycopg/cursor.py", line 117, in execute
-    raise ex.with_traceback(None)
-sqlalchemy.exc.ProgrammingError: (psycopg.errors.UndefinedColumn) column rofr_requests.escrow_release_initiated does not exist
-LINE 1: ...s.response_notes AS rofr_requests_response_notes, rofr_reque...
-                                                             ^
-[SQL: SELECT rofr_requests.id AS rofr_requests_id, rofr_requests.transaction_id AS rofr_requests_transaction_id, rofr_requests.transferability_rule_id AS rofr_requests_transferability_rule_id, rofr_requests.status AS rofr_requests_status, rofr_requests.response_notes AS rofr_requests_response_notes, rofr_requests.escrow_release_initiated AS rofr_requests_escrow_release_initiated, rofr_requests.responded_at AS rofr_requests_responded_at, rofr_requests.source_reference AS rofr_requests_source_reference 
-FROM rofr_requests 
-WHERE rofr_requests.transaction_id IN (%(transaction_id_1_1)s::INTEGER, %(transaction_id_1_2)s::INTEGER)]
-[parameters: {'transaction_id_1_1': 18, 'transaction_id_1_2': 19}]
-(Background on this error at: https://sqlalche.me/e/20/f405)
-INFO:     127.0.0.1:32990 - "GET /app/dashboard.html HTTP/1.1" 304 Not Modified
-INFO:     127.0.0.1:32990 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:32990 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:32990 - "GET /listings HTTP/1.1" 200 OK
-INFO:     127.0.0.1:32990 - "GET /app/browse.html HTTP/1.1" 200 OK
-INFO:     127.0.0.1:32990 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:32990 - "GET /listings HTTP/1.1" 200 OK
-INFO:     127.0.0.1:32990 - "GET /buyer-interests HTTP/1.1" 200 OK
-INFO:     127.0.0.1:32990 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:32990 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:32990 - "GET /kyc-facts/user/60 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:32990 - "GET /app/transactions.html HTTP/1.1" 200 OK
-INFO:     127.0.0.1:32990 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:32990 - "GET /transactions HTTP/1.1" 200 OK
-INFO:     127.0.0.1:32990 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:32990 - "GET /rofr-requests HTTP/1.1" 500 Internal Server Error
-ERROR:    Exception in ASGI application
-Traceback (most recent call last):
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1969, in _exec_single_context
-    self.dialect.do_execute(
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
-    cursor.execute(statement, parameters)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/psycopg/cursor.py", line 117, in execute
-    raise ex.with_traceback(None)
-psycopg.errors.UndefinedColumn: column rofr_requests.escrow_release_initiated does not exist
-LINE 1: ...s.response_notes AS rofr_requests_response_notes, rofr_reque...
-                                                             ^
-
-The above exception was the direct cause of the following exception:
-
-Traceback (most recent call last):
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/uvicorn/protocols/http/h11_impl.py", line 416, in run_asgi
-    result = await app(  # type: ignore[func-returns-value]
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 63, in __call__
-    return await self.app(scope, receive, send)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/applications.py", line 1163, in __call__
-    await super().__call__(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/applications.py", line 96, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
-    raise exc
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
-    await self.app(scope, receive, _send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 193, in __call__
-    response = await self.dispatch_func(request, call_next)
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/app.py", line 104, in add_security_headers
-    response = await call_next(request)
-               ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 168, in call_next
-    raise app_exc from app_exc.__cause__ or app_exc.__context__
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 144, in coro
-    await self.app(scope, receive_or_disconnect, send_no_error)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 193, in __call__
-    response = await self.dispatch_func(request, call_next)
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/slowapi/middleware.py", line 136, in dispatch
-    response = await call_next(request)
-               ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 168, in call_next
-    raise app_exc from app_exc.__cause__ or app_exc.__context__
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 144, in coro
-    await self.app(scope, receive_or_disconnect, send_no_error)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
-    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
-    await self.app(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/routing.py", line 670, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2734, in app
-    await route.handle(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1281, in handle
-    await super().handle(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/routing.py", line 280, in handle
-    await self.app(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 158, in app
-    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 144, in app
-    response = await f(request)
-               ^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 706, in app
-    raw_response = await run_endpoint_function(
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 354, in run_endpoint_function
-    return await run_in_threadpool(dependant.call, **values)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/concurrency.py", line 34, in run_in_threadpool
-    return await anyio.to_thread.run_sync(func)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/anyio/to_thread.py", line 65, in run_sync
-    return await get_async_backend().run_sync_in_worker_thread(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 2641, in run_sync_in_worker_thread
-    return await future
-           ^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 1033, in run
-    result = context.run(func, *args)
-             ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/app.py", line 4370, in get_rofr_requests
-    "summary": risk_radar["summary"],
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/query.py", line 2711, in all
-    return self._iter().all()  # type: ignore
-           ^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/query.py", line 2864, in _iter
-    result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
-                                                  ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2373, in execute
-    return self._execute_internal(
-           ^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2271, in _execute_internal
-    result: Result[Any] = compile_state_cls.orm_execute_statement(
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/context.py", line 306, in orm_execute_statement
-    result = conn.execute(
-             ^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1421, in execute
-    return meth(
-           ^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/sql/elements.py", line 526, in _execute_on_connection
-    return connection._execute_clauseelement(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1643, in _execute_clauseelement
-    ret = self._execute_context(
-          ^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1848, in _execute_context
-    return self._exec_single_context(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1988, in _exec_single_context
-    self._handle_dbapi_exception(
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2365, in _handle_dbapi_exception
-    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1969, in _exec_single_context
-    self.dialect.do_execute(
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
-    cursor.execute(statement, parameters)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/psycopg/cursor.py", line 117, in execute
-    raise ex.with_traceback(None)
-sqlalchemy.exc.ProgrammingError: (psycopg.errors.UndefinedColumn) column rofr_requests.escrow_release_initiated does not exist
-LINE 1: ...s.response_notes AS rofr_requests_response_notes, rofr_reque...
-                                                             ^
-[SQL: SELECT rofr_requests.id AS rofr_requests_id, rofr_requests.transaction_id AS rofr_requests_transaction_id, rofr_requests.transferability_rule_id AS rofr_requests_transferability_rule_id, rofr_requests.status AS rofr_requests_status, rofr_requests.response_notes AS rofr_requests_response_notes, rofr_requests.escrow_release_initiated AS rofr_requests_escrow_release_initiated, rofr_requests.responded_at AS rofr_requests_responded_at, rofr_requests.source_reference AS rofr_requests_source_reference 
-FROM rofr_requests 
-WHERE rofr_requests.transaction_id IN (%(transaction_id_1_1)s::INTEGER, %(transaction_id_1_2)s::INTEGER)]
-[parameters: {'transaction_id_1_1': 18, 'transaction_id_1_2': 19}]
-(Background on this error at: https://sqlalche.me/e/20/f405)
-INFO:     127.0.0.1:33006 - "GET /app/settlement.html HTTP/1.1" 200 OK
-INFO:     127.0.0.1:33006 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:33006 - "GET /settlement-records HTTP/1.1" 200 OK
-INFO:     127.0.0.1:33006 - "GET /app/lending.html HTTP/1.1" 200 OK
-INFO:     127.0.0.1:33006 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:33006 - "GET /ownership-records HTTP/1.1" 200 OK
-INFO:     127.0.0.1:37218 - "GET /loan-requests HTTP/1.1" 500 Internal Server Error
-ERROR:    Exception in ASGI application
-Traceback (most recent call last):
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1969, in _exec_single_context
-    self.dialect.do_execute(
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
-    cursor.execute(statement, parameters)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/psycopg/cursor.py", line 117, in execute
-    raise ex.with_traceback(None)
-psycopg.errors.UndefinedColumn: column loan_requests.escrow_release_initiated does not exist
-LINE 1: ...d_at, loan_requests.notes AS loan_requests_notes, loan_reque...
-                                                             ^
-
-The above exception was the direct cause of the following exception:
-
-Traceback (most recent call last):
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/uvicorn/protocols/http/h11_impl.py", line 416, in run_asgi
-    result = await app(  # type: ignore[func-returns-value]
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 63, in __call__
-    return await self.app(scope, receive, send)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/applications.py", line 1163, in __call__
-    await super().__call__(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/applications.py", line 96, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
-    raise exc
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
-    await self.app(scope, receive, _send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 193, in __call__
-    response = await self.dispatch_func(request, call_next)
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/app.py", line 104, in add_security_headers
-    response = await call_next(request)
-               ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 168, in call_next
-    raise app_exc from app_exc.__cause__ or app_exc.__context__
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 144, in coro
-    await self.app(scope, receive_or_disconnect, send_no_error)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 193, in __call__
-    response = await self.dispatch_func(request, call_next)
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/slowapi/middleware.py", line 136, in dispatch
-    response = await call_next(request)
-               ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 168, in call_next
-    raise app_exc from app_exc.__cause__ or app_exc.__context__
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 144, in coro
-    await self.app(scope, receive_or_disconnect, send_no_error)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
-    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
-    await self.app(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/routing.py", line 670, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2734, in app
-    await route.handle(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1281, in handle
-    await super().handle(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/routing.py", line 280, in handle
-    await self.app(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 158, in app
-    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 144, in app
-    response = await f(request)
-               ^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 706, in app
-    raw_response = await run_endpoint_function(
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 354, in run_endpoint_function
-    return await run_in_threadpool(dependant.call, **values)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/concurrency.py", line 34, in run_in_threadpool
-    return await anyio.to_thread.run_sync(func)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/anyio/to_thread.py", line 65, in run_sync
-    return await get_async_backend().run_sync_in_worker_thread(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 2641, in run_sync_in_worker_thread
-    return await future
-           ^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 1033, in run
-    result = context.run(func, *args)
-             ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/app.py", line 4812, in get_loan_requests
-    notes=notes
-                
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/query.py", line 2711, in all
-    return self._iter().all()  # type: ignore
-           ^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/query.py", line 2864, in _iter
-    result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
-                                                  ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2373, in execute
-    return self._execute_internal(
-           ^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2271, in _execute_internal
-    result: Result[Any] = compile_state_cls.orm_execute_statement(
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/context.py", line 306, in orm_execute_statement
-    result = conn.execute(
-             ^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1421, in execute
-    return meth(
-           ^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/sql/elements.py", line 526, in _execute_on_connection
-    return connection._execute_clauseelement(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1643, in _execute_clauseelement
-    ret = self._execute_context(
-          ^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1848, in _execute_context
-    return self._exec_single_context(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1988, in _exec_single_context
-    self._handle_dbapi_exception(
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2365, in _handle_dbapi_exception
-    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1969, in _exec_single_context
-    self.dialect.do_execute(
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
-    cursor.execute(statement, parameters)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/psycopg/cursor.py", line 117, in execute
-    raise ex.with_traceback(None)
-sqlalchemy.exc.ProgrammingError: (psycopg.errors.UndefinedColumn) column loan_requests.escrow_release_initiated does not exist
-LINE 1: ...d_at, loan_requests.notes AS loan_requests_notes, loan_reque...
-                                                             ^
-[SQL: SELECT loan_requests.id AS loan_requests_id, loan_requests.holder_id AS loan_requests_holder_id, loan_requests.ownership_record_id AS loan_requests_ownership_record_id, loan_requests.requested_amount AS loan_requests_requested_amount, loan_requests.status AS loan_requests_status, loan_requests.external_lender_name AS loan_requests_external_lender_name, loan_requests.external_lender_reference AS loan_requests_external_lender_reference, loan_requests.matched_at AS loan_requests_matched_at, loan_requests.closed_at AS loan_requests_closed_at, loan_requests.notes AS loan_requests_notes, loan_requests.escrow_release_initiated AS loan_requests_escrow_release_initiated 
-FROM loan_requests 
-WHERE loan_requests.holder_id = %(holder_id_1)s::INTEGER]
-[parameters: {'holder_id_1': 60}]
-(Background on this error at: https://sqlalche.me/e/20/f405)
-INFO:     127.0.0.1:33006 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:33006 - "GET /option-funding-referrals HTTP/1.1" 500 Internal Server Error
-ERROR:    Exception in ASGI application
-Traceback (most recent call last):
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1969, in _exec_single_context
-    self.dialect.do_execute(
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
-    cursor.execute(statement, parameters)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/psycopg/cursor.py", line 117, in execute
-    raise ex.with_traceback(None)
-psycopg.errors.UndefinedColumn: column option_funding_referrals.escrow_release_initiated does not exist
-LINE 1: ...eferrals.notes AS option_funding_referrals_notes, option_fun...
-                                                             ^
-
-The above exception was the direct cause of the following exception:
-
-Traceback (most recent call last):
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/uvicorn/protocols/http/h11_impl.py", line 416, in run_asgi
-    result = await app(  # type: ignore[func-returns-value]
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 63, in __call__
-    return await self.app(scope, receive, send)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/applications.py", line 1163, in __call__
-    await super().__call__(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/applications.py", line 96, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
-    raise exc
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
-    await self.app(scope, receive, _send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 193, in __call__
-    response = await self.dispatch_func(request, call_next)
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/app.py", line 104, in add_security_headers
-    response = await call_next(request)
-               ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 168, in call_next
-    raise app_exc from app_exc.__cause__ or app_exc.__context__
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 144, in coro
-    await self.app(scope, receive_or_disconnect, send_no_error)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 193, in __call__
-    response = await self.dispatch_func(request, call_next)
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/slowapi/middleware.py", line 136, in dispatch
-    response = await call_next(request)
-               ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 168, in call_next
-    raise app_exc from app_exc.__cause__ or app_exc.__context__
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 144, in coro
-    await self.app(scope, receive_or_disconnect, send_no_error)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
-    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
-    await self.app(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/routing.py", line 670, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2734, in app
-    await route.handle(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1281, in handle
-    await super().handle(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/routing.py", line 280, in handle
-    await self.app(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 158, in app
-    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 144, in app
-    response = await f(request)
-               ^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 706, in app
-    raw_response = await run_endpoint_function(
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 354, in run_endpoint_function
-    return await run_in_threadpool(dependant.call, **values)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/starlette/concurrency.py", line 34, in run_in_threadpool
-    return await anyio.to_thread.run_sync(func)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/anyio/to_thread.py", line 65, in run_sync
-    return await get_async_backend().run_sync_in_worker_thread(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 2641, in run_sync_in_worker_thread
-    return await future
-           ^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 1033, in run
-    result = context.run(func, *args)
-             ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/app.py", line 4951, in get_option_funding_referrals
-    company=company,
-                ^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/query.py", line 2711, in all
-    return self._iter().all()  # type: ignore
-           ^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/query.py", line 2864, in _iter
-    result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
-                                                  ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2373, in execute
-    return self._execute_internal(
-           ^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2271, in _execute_internal
-    result: Result[Any] = compile_state_cls.orm_execute_statement(
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/orm/context.py", line 306, in orm_execute_statement
-    result = conn.execute(
-             ^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1421, in execute
-    return meth(
-           ^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/sql/elements.py", line 526, in _execute_on_connection
-    return connection._execute_clauseelement(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1643, in _execute_clauseelement
-    ret = self._execute_context(
-          ^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1848, in _execute_context
-    return self._exec_single_context(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1988, in _exec_single_context
-    self._handle_dbapi_exception(
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2365, in _handle_dbapi_exception
-    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1969, in _exec_single_context
-    self.dialect.do_execute(
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
-    cursor.execute(statement, parameters)
-  File "/home/king/KEVO/.venv/lib/python3.12/site-packages/psycopg/cursor.py", line 117, in execute
-    raise ex.with_traceback(None)
-sqlalchemy.exc.ProgrammingError: (psycopg.errors.UndefinedColumn) column option_funding_referrals.escrow_release_initiated does not exist
-LINE 1: ...eferrals.notes AS option_funding_referrals_notes, option_fun...
-                                                             ^
-[SQL: SELECT option_funding_referrals.id AS option_funding_referrals_id, option_funding_referrals.holder_id AS option_funding_referrals_holder_id, option_funding_referrals.company AS option_funding_referrals_company, option_funding_referrals.notes AS option_funding_referrals_notes, option_funding_referrals.escrow_release_initiated AS option_funding_referrals_escrow_release_initiated, option_funding_referrals.status AS option_funding_referrals_status, option_funding_referrals.referred_provider_name AS option_funding_referrals_referred_provider_name, option_funding_referrals.referred_at AS option_funding_referrals_referred_at, option_funding_referrals.closed_at AS option_funding_referrals_closed_at 
-FROM option_funding_referrals 
-WHERE option_funding_referrals.holder_id = %(holder_id_1)s::INTEGER]
-[parameters: {'holder_id_1': 60}]
-(Background on this error at: https://sqlalche.me/e/20/f405)
-INFO:     127.0.0.1:37220 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:37220 - "GET /app/tender-offer.html HTTP/1.1" 304 Not Modified
-INFO:     127.0.0.1:37220 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:37220 - "GET /tender-offer-elections HTTP/1.1" 200 OK
-INFO:     127.0.0.1:37226 - "GET /tender-offer-programs HTTP/1.1" 200 OK
-INFO:     127.0.0.1:37226 - "GET /app/ HTTP/1.1" 304 Not Modified
-INFO:     127.0.0.1:37226 - "POST /login HTTP/1.1" 200 OK
-INFO:     127.0.0.1:37226 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:37226 - "GET /me HTTP/1.1" 200 OK
-INFO:     127.0.0.1:37226 - "GET /tender-offer-elections HTTP/1.1" 200 OK
-INFO:     127.0.0.1:60860 - "GET /tender-offer-programs HTTP/1.1" 200 OK
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [320080]
+INFO:     127.0.0.1:43846 - "POST /users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43850 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43852 - "POST /users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43864 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43874 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43888 - "POST /listings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43894 - "POST /transactions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43910 - "PATCH /transactions/25/status?status=accepted HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43916 - "POST /seller-financing-agreements HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43918 - "GET /seller-financing-agreements/5/payments HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43920 - "POST /seller-financing-agreements/5/reserve HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43922 - "PUT /seller-financing-agreements/5/reserve/fund?funded_reference=escrow.com+sandbox+txn+%23LIVE-1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43936 - "POST /seller-financing-agreements/5/collateral HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43938 - "PUT /seller-financing-agreements/5/collateral/1?legal_review_status=reviewed_flagged&legal_review_notes=Pledge+of+shares+in+a+private+company+needs+a+control+agreement+or+UCC-1+to+actually+perfect+-+flagged+for+counsel%2C+not+enforceable+as-is. HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43944 - "POST /listings HTTP/1.1" 403 Forbidden
+INFO:     127.0.0.1:43960 - "PUT /seller-financing-agreements/5/payments/19/confirm HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43966 - "GET /seller-financing-agreements/5/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43968 - "POST /seller-financing-agreements/reminders/run HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43980 - "PUT /seller-financing-agreements/5/default?default_reason=Buyer+stopped+paying+after+installment+1 HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:42438 - "POST /users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42450 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42456 - "POST /users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42460 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42474 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42480 - "POST /listings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42490 - "POST /transactions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42494 - "PATCH /transactions/26/status?status=accepted HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42496 - "POST /seller-financing-agreements HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42506 - "GET /seller-financing-agreements/6/payments HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42520 - "POST /seller-financing-agreements/6/reserve HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42526 - "PUT /seller-financing-agreements/6/reserve/fund?funded_reference=escrow.com+sandbox+txn+%23LIVE-1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42542 - "POST /seller-financing-agreements/6/collateral HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42546 - "PUT /seller-financing-agreements/6/collateral/2?legal_review_status=reviewed_flagged&legal_review_notes=Pledge+of+shares+in+a+private+company+needs+a+control+agreement+or+UCC-1+to+actually+perfect+-+flagged+for+counsel%2C+not+enforceable+as-is. HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42554 - "POST /listings HTTP/1.1" 403 Forbidden
+INFO:     127.0.0.1:42566 - "PUT /seller-financing-agreements/6/payments/22/confirm HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42570 - "GET /seller-financing-agreements/6/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42582 - "POST /seller-financing-agreements/reminders/run HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42588 - "PUT /seller-financing-agreements/6/default?reason=Buyer+stopped+paying+after+installment+1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42592 - "POST /buyer-interests HTTP/1.1" 403 Forbidden
+INFO:     127.0.0.1:42606 - "PUT /seller-financing-agreements/6/resolve-default?resolution_notes=Parties+settled+outside+the+platform%3B+buyer+cleared+to+resume HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42618 - "POST /buyer-interests HTTP/1.1" 200 OK
