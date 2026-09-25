@@ -1,23 +1,22 @@
 nohup: ignoring input
-INFO:     Started server process [583595]
+INFO:     Started server process [602022]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-INFO:     127.0.0.1:52852 - "POST /users HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52856 - "POST /login HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52866 - "POST /users HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52870 - "POST /login HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52884 - "POST /users HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52890 - "POST /login HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52902 - "POST /login HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52912 - "POST /listings HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52914 - "POST /transactions HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52922 - "POST /transactions/999999999/checklist-items HTTP/1.1" 404 Not Found
-INFO:     127.0.0.1:52938 - "POST /transactions/28/checklist-items HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52940 - "GET /transactions/28/checklist-items HTTP/1.1" 403 Forbidden
-INFO:     127.0.0.1:52954 - "PUT /checklist-items/1?status=complete HTTP/1.1" 403 Forbidden
-INFO:     127.0.0.1:52966 - "GET /transactions/28/checklist-items HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52972 - "PUT /checklist-items/1?status=complete HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52986 - "POST /transactions/28/checklist-items HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52998 - "PUT /checklist-items/2?status=not_applicable HTTP/1.1" 200 OK
-INFO:     127.0.0.1:53010 - "GET /transactions/28/checklist-items HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58970 - "GET /docs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36498 - "POST /users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36502 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36506 - "POST /users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36508 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36514 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36524 - "PUT /users/121/kyc-status?status=verified HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36540 - "POST /listings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36544 - "POST /compliance-rules HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36550 - "POST /transactions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36558 - "GET /rule-change-alerts HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36572 - "PUT /compliance-rules/11 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36588 - "GET /rule-change-alerts HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36594 - "GET /rule-change-alerts HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36596 - "PUT /rule-change-alerts/3/mark-read HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36600 - "PUT /compliance-rules/11 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36610 - "GET /rule-change-alerts HTTP/1.1" 200 OK
