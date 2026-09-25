@@ -1009,3 +1009,38 @@ class Message(Base):
     sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     body = Column(String(2000), nullable=False)
     created_at = Column(DateTime, nullable=False)
+
+
+class LiquidityCommitment(Base):
+    """
+    M31 gap-closure item, 2026-09-25 - Liquidity Commitment, the fourth of
+    M31's remaining pieces (Interest-strength signaling extended into a
+    richer, parameterized standing interest). Deliberately pure data
+    capture, confirmed with Eze 2026-09-25: a richer BuyerInterest-like
+    record (price range, quantity range, expiration, free-text
+    conditions) that nothing new matches or acts on automatically. Scoped
+    this way on purpose - a version that auto-triggered matching on these
+    richer conditions would edge closer to resting-limit-order territory,
+    the same class of concern that got M16B's original full scope
+    narrowed after dedicated Rule 3b-16 research. This stays as safe as
+    plain BuyerInterest: a buyer's own non-binding record, visible only
+    through the same kind of scoped read/withdraw pattern BuyerInterest
+    already uses, not fed into any new coordination logic.
+
+    Explicitly, per the milestone's own name: NOT a binding offer, NOT an
+    order, NOT matched automatically by anything built here.
+    """
+    __tablename__ = "liquidity_commitments"
+
+    id = Column(Integer, primary_key=True)
+    buyer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    company = Column(String(255), nullable=False)
+    asset_type = Column(String(100), nullable=False)
+    min_quantity = Column(Integer, nullable=True)
+    max_quantity = Column(Integer, nullable=True)
+    min_price = Column(Numeric(15, 2), nullable=True)
+    max_price = Column(Numeric(15, 2), nullable=True)
+    expiration_date = Column(Date, nullable=True)
+    conditions = Column(String(1000), nullable=True)
+    status = Column(String(50), nullable=False, default="active")
+    created_at = Column(DateTime, nullable=False)
