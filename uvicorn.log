@@ -153,3 +153,33 @@ WHERE loan_requests.holder_id = %(holder_id_1)s::INTEGER]
 (Background on this error at: https://sqlalche.me/e/20/f405)
 INFO:     127.0.0.1:34942 - "GET /ownership-records HTTP/1.1" 200 OK
 INFO:     127.0.0.1:33112 - "POST /users HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:60630 - "POST /users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60638 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60640 - "POST /users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60646 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60652 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60654 - "POST /listings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60656 - "POST /transactions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60666 - "POST /seller-financing-agreements HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:46488 - "POST /users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46490 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46498 - "POST /users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46504 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46520 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46534 - "POST /listings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46542 - "POST /transactions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46544 - "PATCH /transactions/22/status?status=accepted HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46546 - "POST /seller-financing-agreements HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54946 - "POST /users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54952 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54956 - "POST /users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54966 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41228 - "POST /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41232 - "POST /listings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41248 - "POST /transactions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41250 - "PATCH /transactions/23/status?status=accepted HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41260 - "POST /seller-financing-agreements HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [503271]
