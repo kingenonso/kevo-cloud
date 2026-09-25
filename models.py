@@ -531,6 +531,30 @@ class PasswordResetToken(Base):
     used_at = Column(DateTime, nullable=True)
 
 
+class WithdrawalConfirmation(Base):
+    """
+    M32 continuation - step-up authentication for large withdrawals
+    (spec Section 15). Mirrors PasswordResetToken's pattern exactly:
+    only a SHA-256 hash of the confirmation token is stored, never the
+    raw value - the raw token exists only in the emailed link. Single-use
+    (used_at) and time-limited (expires_at). Stores the withdrawal's own
+    parameters so the actual wallet_client.withdraw() call only fires
+    once the token is confirmed - nothing moves before that.
+    """
+    __tablename__ = "withdrawal_confirmations"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    amount = Column(Numeric(15, 2), nullable=False)
+    currency = Column(String(3), nullable=False)
+    bank_account_id = Column(Integer, nullable=False)
+    idempotency_key = Column(String(100), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+
+
 class SettlementRecord(Base):
     """
     M26 (first slice) - Settlement status tracking, orchestration-only.
