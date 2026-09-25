@@ -950,3 +950,35 @@ class SecondaryAuctionBid(Base):
     decided_at = Column(DateTime, nullable=True)
     decided_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     resulting_transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)
+
+
+class ComplianceRuleChangeAlert(Base):
+    """
+    M27 gap-closure item, 2026-09-25 - compliance rule-change impact
+    alerts, the second of M27's two remaining pieces (the Hash-Chained
+    Compliance Decision Ledger, M27's first piece, already shipped
+    2026-09-19). Built on top of that Ledger rather than a new rule-
+    versioning system: when an admin edits a ComplianceRule (the
+    already-existing PUT /compliance-rules/{rule_id}), KEVO finds every
+    still-open transaction whose most recent Ledger entry cited this
+    exact rule code, re-runs the real assess_compliance() verdict against
+    the rule's new wording, and creates one alert only where the actual
+    outcome changed (e.g. eligible -> needs review). Purely informational,
+    like DealAlert (M31) - never blocks or changes the transaction itself,
+    preserving the standing no-trade-term-setting/no-enforcement
+    invariant already governing the Ledger it reads from.
+    """
+    __tablename__ = "compliance_rule_change_alerts"
+
+    id = Column(Integer, primary_key=True)
+    compliance_rule_id = Column(Integer, ForeignKey("compliance_rules.id"), nullable=False)
+    transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=False)
+    buyer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    listing_id = Column(Integer, ForeignKey("listings.id"), nullable=False)
+    previous_decision_status = Column(String(50), nullable=False)
+    new_decision_status = Column(String(50), nullable=False)
+    previous_explanation = Column(String(1000), nullable=True)
+    new_explanation = Column(String(1000), nullable=True)
+    is_read = Column(Boolean, nullable=False, default=False)
+    read_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False)

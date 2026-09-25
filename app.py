@@ -29,6 +29,7 @@ from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibil
 from models import Transaction
 from models import DueDiligenceChecklistItem
 from models import SecondaryAuctionBid
+from models import ComplianceRuleChangeAlert
 import escrow_client
 import email_client
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -3082,6 +3083,8 @@ def update_compliance_rule(
     log_audit_event(db, current_user.id, "compliance_rule_updated", target_type="compliance_rule", target_id=rule.id, detail=", ".join(update_data.keys()))
     db.commit()
     db.refresh(rule)
+
+    _trigger_compliance_rule_change_alerts(rule, db)
 
     return {
         "message": "Compliance rule updated",
@@ -7492,3 +7495,164 @@ def withdraw_auction_bid(
     db.commit()
     db.refresh(bid)
     return bid
+
+
+def _trigger_compliance_rule_change_alerts(rule, db):
+    """
+    Called after a ComplianceRule is edited (PUT /compliance-rules/{id}).
+    Finds every still-open transaction whose most recent Compliance
+    Decision Ledger entry cited this exact rule code, re-runs the real
+    assess_compliance() verdict against the rule's new wording, and
+    creates one ComplianceRuleChangeAlert only where the outcome actually
+    changed. Purely informational - mirrors DealAlert's trigger pattern
+    (M31), never blocks or changes the transaction itself.
+    """
+    terminal_statuses = {"completed", "rejected", "cancelled"}
+
+    candidate_entries = db.query(ComplianceDecisionLedger).filter(
+        ComplianceDecisionLedger.applicable_rule_codes.like(f"%{rule.rule_code}%")
+    ).order_by(ComplianceDecisionLedger.decided_at.desc()).all()
+
+    latest_entry_by_transaction = {}
+    for entry in candidate_entries:
+        if entry.transaction_id in latest_entry_by_transaction:
+            continue
+        latest_entry_by_transaction[entry.transaction_id] = entry
+
+    for transaction_id, last_entry in latest_entry_by_transaction.items():
+        cited_codes = json.loads(last_entry.applicable_rule_codes)
+        if rule.rule_code not in cited_codes:
+            continue
+
+        transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+        if transaction is None or transaction.status in terminal_statuses:
+            continue
+
+        buyer = db.query(UserModel).filter(UserModel.id == transaction.buyer_id).first()
+        listing = db.query(ListingModel).filter(ListingModel.id == transaction.listing_id).first()
+        if buyer is None or listing is None:
+            continue
+
+        # "Current known state" is the most recent rule-change alert
+        # already raised for this transaction (if any), not always the
+        # original Ledger entry - the Ledger is append-only and only
+        # gains a new row on a real transaction lifecycle event (creation,
+        # a status change), never on a rule edit. Without this, a second,
+        # unrelated rule edit would keep comparing against the same
+        # now-stale Ledger snapshot and wrongly re-alert on a change that
+        # already has an alert.
+        most_recent_alert = db.query(ComplianceRuleChangeAlert).filter(
+            ComplianceRuleChangeAlert.transaction_id == transaction_id
+        ).order_by(ComplianceRuleChangeAlert.created_at.desc()).first()
+
+        previous_status = most_recent_alert.new_decision_status if most_recent_alert else last_entry.decision_status
+        previous_explanation = most_recent_alert.new_explanation if most_recent_alert else last_entry.explanation
+
+        fresh_verdict = assess_compliance(buyer, listing, db)
+
+        if fresh_verdict["status"] == previous_status:
+            continue
+
+        alert = ComplianceRuleChangeAlert(
+            compliance_rule_id=rule.id,
+            transaction_id=transaction.id,
+            buyer_id=transaction.buyer_id,
+            listing_id=transaction.listing_id,
+            previous_decision_status=previous_status,
+            new_decision_status=fresh_verdict["status"],
+            previous_explanation=previous_explanation,
+            new_explanation=fresh_verdict["explanation"],
+            created_at=datetime.utcnow(),
+        )
+        db.add(alert)
+
+    db.commit()
+
+
+@app.get("/rule-change-alerts")
+def list_rule_change_alerts(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type == "admin":
+        alerts = db.query(ComplianceRuleChangeAlert).order_by(ComplianceRuleChangeAlert.created_at.desc()).all()
+    else:
+        alerts = db.query(ComplianceRuleChangeAlert).filter(
+            ComplianceRuleChangeAlert.buyer_id == current_user.id
+        ).order_by(ComplianceRuleChangeAlert.created_at.desc()).all()
+
+    return {
+        "alerts": [
+            {
+                "id": a.id,
+                "compliance_rule_id": a.compliance_rule_id,
+                "transaction_id": a.transaction_id,
+                "listing_id": a.listing_id,
+                "buyer_id": a.buyer_id,
+                "previous_decision_status": a.previous_decision_status,
+                "new_decision_status": a.new_decision_status,
+                "previous_explanation": a.previous_explanation,
+                "new_explanation": a.new_explanation,
+                "is_read": a.is_read,
+                "read_at": a.read_at.isoformat() if a.read_at else None,
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+            }
+            for a in alerts
+        ]
+    }
+
+
+@app.get("/rule-change-alerts/{alert_id}")
+def get_rule_change_alert(
+    alert_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    alert = db.query(ComplianceRuleChangeAlert).filter(ComplianceRuleChangeAlert.id == alert_id).first()
+
+    if alert is None:
+        raise HTTPException(status_code=404, detail="Rule change alert not found")
+
+    if current_user.account_type != "admin" and current_user.id != alert.buyer_id:
+        raise HTTPException(status_code=403, detail="You can only view your own rule change alerts")
+
+    return {
+        "id": alert.id,
+        "compliance_rule_id": alert.compliance_rule_id,
+        "transaction_id": alert.transaction_id,
+        "listing_id": alert.listing_id,
+        "buyer_id": alert.buyer_id,
+        "previous_decision_status": alert.previous_decision_status,
+        "new_decision_status": alert.new_decision_status,
+        "previous_explanation": alert.previous_explanation,
+        "new_explanation": alert.new_explanation,
+        "is_read": alert.is_read,
+        "read_at": alert.read_at.isoformat() if alert.read_at else None,
+        "created_at": alert.created_at.isoformat() if alert.created_at else None,
+    }
+
+
+@app.put("/rule-change-alerts/{alert_id}/mark-read")
+def mark_rule_change_alert_read(
+    alert_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    alert = db.query(ComplianceRuleChangeAlert).filter(ComplianceRuleChangeAlert.id == alert_id).first()
+
+    if alert is None:
+        raise HTTPException(status_code=404, detail="Rule change alert not found")
+
+    if current_user.id != alert.buyer_id:
+        raise HTTPException(status_code=403, detail="You can only mark your own rule change alerts as read")
+
+    alert.is_read = True
+    alert.read_at = datetime.utcnow()
+    db.commit()
+    db.refresh(alert)
+
+    return {
+        "id": alert.id,
+        "is_read": alert.is_read,
+        "read_at": alert.read_at.isoformat() if alert.read_at else None,
+    }
