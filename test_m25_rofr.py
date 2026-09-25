@@ -10,8 +10,13 @@ record the real-world outcome (approved / waived / exercised). GET
 /rofr-requests lists the caller's own requests (admin sees all). GET
 /rofr-requests/{id} is scoped to the transaction's buyer, seller, or admin.
 
-Deliberately NOT deadline-driven -- no auto-deadline, no countdown. See
-claude/kevo-m25-rofr-patent-claim-analysis.md for why.
+Still deliberately avoids any auto-triggered countdown or automatic
+escalation when a deadline passes -- see
+claude/kevo-m25-rofr-patent-claim-analysis.md for why. As of 2026-09-25,
+response_due_date is computed from TransferabilityRule.rofr_response_window_days
+when that rule has a real, sourced window on file; it stays null otherwise --
+no jurisdiction-wide deadline is ever invented (confirmed by research: ROFR
+response periods are always a company's own contractual term, never statutory).
 """
 import os
 os.environ.setdefault("DB_HOST", "localhost")
@@ -20,6 +25,7 @@ os.environ.setdefault("DB_NAME", "kevo_test_placeholder")
 os.environ.setdefault("DB_USER", "kevo_test_placeholder")
 os.environ.setdefault("DB_PASSWORD", "kevo_test_placeholder")
 
+from datetime import date, timedelta
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -422,3 +428,42 @@ def test_get_by_id_unknown_404(client, db_session):
 def test_get_by_id_unauthenticated_401(client, db_session):
     resp = client.get("/rofr-requests/1")
     assert resp.status_code == 401
+
+
+# --- response_due_date (added 2026-09-25) ---
+
+def test_response_due_date_computed_when_rule_has_window(client, db_session):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer)
+    rule = make_transferability_rule(db_session)
+    rule.rofr_response_window_days = 30
+    db_session.commit()
+
+    resp = client.post("/rofr-requests", headers=auth_headers(seller), json={
+        "transaction_id": txn.id,
+        "transferability_rule_id": rule.id,
+        "source_reference": "Shareholders agreement clause 7.2, 30-day response window",
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    expected_due = (date.today() + timedelta(days=30)).isoformat()
+    assert body["response_due_date"] == expected_due
+
+
+def test_response_due_date_null_when_rule_has_no_window(client, db_session):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer)
+    rule = make_transferability_rule(db_session)
+
+    resp = client.post("/rofr-requests", headers=auth_headers(seller), json={
+        "transaction_id": txn.id,
+        "transferability_rule_id": rule.id,
+        "source_reference": "No sourced response window for this rule yet",
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["response_due_date"] is None
