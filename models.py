@@ -360,6 +360,7 @@ class TransferabilityRule(Base):
     source_reference = Column(String(500), nullable=True)
     hold_period_days = Column(Integer, nullable=True)
     expected_fact_value = Column(String(500), nullable=True)
+    rofr_response_window_days = Column(Integer, nullable=True)  # M25: real, sourced per-rule ROFR response window in days; null = not sourced yet, never invented
     
 class TransferabilityAssessment(Base):
     __tablename__ = "transferability_assessments"
@@ -483,11 +484,14 @@ class LiquidityPathStep(Base):
 class RofrRequest(Base):
     """
     M25 (first slice) - Right of First Refusal, consent request + response
-    log. Deliberately NOT deadline-driven: no jurisdiction has a real,
-    sourced ROFR response-window on file (TransferabilityRule.hold_period_days
-    means something different - time held before sale, not time to
-    respond to a ROFR notice - and is empty for the one real ROFR rule
-    that exists, ZA-COMPANIES-S8-ROFR-CONSENT). Also deliberately avoids
+    log. Response deadlines are never invented: no jurisdiction sets a
+    statutory ROFR response window (confirmed by research 2026-09-25) -
+    it is always a company's own contractual term. TransferabilityRule.
+    rofr_response_window_days holds the real, sourced window for a
+    specific rule when one is known (entered directly, same as other
+    curated facts); response_due_date is computed from it at request
+    creation time and stays null when the window isn't known. Still
+    deliberately avoids
     an auto-triggered countdown, the specific mechanism flagged as
     patent-adjacent in claude/kevo-m25-rofr-patent-claim-analysis.md
     (Nasdaq Private Market US 12,572,980). KEVO has no "issuer" or
@@ -506,6 +510,7 @@ class RofrRequest(Base):
     escrow_release_initiated = Column(Boolean, nullable=False, default=False)
     responded_at = Column(DateTime, nullable=True)
     source_reference = Column(String(500), nullable=True)
+    response_due_date = Column(Date, nullable=True)  # M25: computed from the matched rule's rofr_response_window_days at creation time, when known
 class PasswordResetToken(Base):
     """
     Full-gap-closure pass (Batch B, group 3 item 15), 2026-09-24 - the
@@ -887,3 +892,61 @@ class SellerFinancingCollateral(Base):
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=True)
     released_at = Column(DateTime, nullable=True)
+
+
+class DueDiligenceChecklistItem(Base):
+    """
+    M25 gap-closure item, 2026-09-25 - a structured due-diligence checklist
+    per transaction. Purely organizational (unlike ROFR or the sealed-bid
+    auction mechanism also being built under M25) - no legal-exposure
+    research needed. Any party to the transaction (buyer, seller) or an
+    admin can add or complete an item, mirroring the deal room's own
+    collaborative posture rather than the stricter self-submit/admin-verify
+    pattern used for KYC/Evidence (those verify facts about identity or
+    ownership; a checklist item is just organizational state to track,
+    nothing to certify).
+    """
+    __tablename__ = "due_diligence_checklist_items"
+
+    id = Column(Integer, primary_key=True)
+    transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=False)
+    description = Column(String(500), nullable=False)
+    status = Column(String(50), nullable=False, default="pending")
+    evidence_id = Column(Integer, ForeignKey("evidence.id"), nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    completed_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    source_reference = Column(String(500), nullable=True)
+    created_at = Column(DateTime, nullable=False)
+
+
+class SecondaryAuctionBid(Base):
+    """
+    M25 gap-closure item, 2026-09-25 - the third and final M25 sub-piece:
+    Structured Secondary Auctions. A sealed-bid mechanism for a listing -
+    buyers submit their own freely-chosen price and quantity (KEVO never
+    computes, suggests, or ranks a price), each buyer can see only their
+    own bid (never another buyer's terms), and the listing's seller
+    privately reviews every bid and manually accepts exactly one, which
+    becomes a normal Transaction. KEVO performs no automated matching,
+    ranking, or clearing-price computation - the seller's own manual
+    accept decision is what keeps this a negotiation process rather than
+    an automated exchange (see 2026-09-25 SEC Rule 3b-16 research: an
+    "exchange" is defined by non-discretionary, automated order matching;
+    preserving human/seller discretion at the point of acceptance is what
+    keeps a bid-collection mechanism like this one outside that
+    definition).
+    """
+    __tablename__ = "secondary_auction_bids"
+
+    id = Column(Integer, primary_key=True)
+    listing_id = Column(Integer, ForeignKey("listings.id"), nullable=False)
+    bidder_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    bid_price = Column(Numeric(15, 2), nullable=False)
+    note = Column(String(500), nullable=True)
+    status = Column(String(50), nullable=False, default="submitted")
+    created_at = Column(DateTime, nullable=False)
+    decided_at = Column(DateTime, nullable=True)
+    decided_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    resulting_transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)

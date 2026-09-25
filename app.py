@@ -27,6 +27,8 @@ from models import Listing as ListingModel
 from models import User as UserModel
 from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection, DealAlert, PasswordResetToken, AuditLogEntry, SellerFinancingAgreement, SellerFinancingPayment, SellerFinancingReserve, SellerFinancingCollateral
 from models import Transaction
+from models import DueDiligenceChecklistItem
+from models import SecondaryAuctionBid
 import escrow_client
 import email_client
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -5145,11 +5147,15 @@ def create_rofr_request(
     applicable_rules = find_applicable_transferability_rules(listing, db)
     if rule.id not in [r.id for r in applicable_rules]:
         raise HTTPException(status_code=400, detail="This transferability rule does not apply to this transaction's listing")
+    response_due_date = None
+    if rule.rofr_response_window_days is not None:
+        response_due_date = date.today() + timedelta(days=rule.rofr_response_window_days)
     rofr_request = RofrRequest(
         transaction_id=transaction.id,
         transferability_rule_id=rule.id,
         status="pending",
-        source_reference=payload.source_reference
+        source_reference=payload.source_reference,
+        response_due_date=response_due_date
     )
     db.add(rofr_request)
     db.commit()
@@ -7228,3 +7234,261 @@ def _start_seller_financing_reminder_scheduler():
 def _stop_seller_financing_reminder_scheduler():
     if _seller_financing_scheduler.running:
         _seller_financing_scheduler.shutdown(wait=False)
+
+
+# --- M25 gap-closure: Due-Diligence Checklist (2026-09-25) ---
+# Purely organizational - any party to the transaction (buyer, seller) or
+# an admin can add or complete an item. No self-submit/admin-verify split
+# needed here, unlike KYC/Evidence, since nothing is being certified.
+
+class ChecklistItemCreate(BaseModel):
+    description: str
+    evidence_id: int | None = None
+    source_reference: str | None = None
+
+
+def _require_checklist_party_or_admin(transaction, current_user):
+    is_admin = current_user.account_type == "admin"
+    is_party = current_user.id in (transaction.buyer_id, transaction.seller_id)
+    if not (is_admin or is_party):
+        raise HTTPException(status_code=403, detail="You are not a party to this transaction")
+
+
+@app.post("/transactions/{transaction_id}/checklist-items")
+def create_checklist_item(
+    transaction_id: int,
+    payload: ChecklistItemCreate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if transaction is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    _require_checklist_party_or_admin(transaction, current_user)
+
+    if payload.evidence_id is not None:
+        evidence = db.query(Evidence).filter(Evidence.id == payload.evidence_id).first()
+        if evidence is None:
+            raise HTTPException(status_code=404, detail="Evidence not found")
+
+    item = DueDiligenceChecklistItem(
+        transaction_id=transaction_id,
+        description=payload.description,
+        status="pending",
+        evidence_id=payload.evidence_id,
+        created_by_user_id=current_user.id,
+        source_reference=payload.source_reference,
+        created_at=datetime.utcnow(),
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.put("/checklist-items/{item_id}")
+def update_checklist_item(
+    item_id: int,
+    status: str,
+    evidence_id: int | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    item = db.query(DueDiligenceChecklistItem).filter(DueDiligenceChecklistItem.id == item_id).first()
+    if item is None:
+        raise HTTPException(status_code=404, detail="Checklist item not found")
+    transaction = db.query(Transaction).filter(Transaction.id == item.transaction_id).first()
+    _require_checklist_party_or_admin(transaction, current_user)
+
+    if status not in ("pending", "complete", "not_applicable"):
+        raise HTTPException(status_code=400, detail="Invalid status")
+
+    if evidence_id is not None:
+        evidence = db.query(Evidence).filter(Evidence.id == evidence_id).first()
+        if evidence is None:
+            raise HTTPException(status_code=404, detail="Evidence not found")
+        item.evidence_id = evidence_id
+
+    item.status = status
+    if status == "complete":
+        item.completed_by_user_id = current_user.id
+        item.completed_at = datetime.utcnow()
+    else:
+        item.completed_by_user_id = None
+        item.completed_at = None
+
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.get("/transactions/{transaction_id}/checklist-items")
+def get_checklist_items(
+    transaction_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if transaction is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    _require_checklist_party_or_admin(transaction, current_user)
+    return db.query(DueDiligenceChecklistItem).filter(
+        DueDiligenceChecklistItem.transaction_id == transaction_id
+    ).all()
+
+
+class AuctionBidCreate(BaseModel):
+    quantity: int
+    bid_price: float
+    note: str | None = None
+
+
+def _require_auction_seller_or_admin(listing, current_user):
+    is_admin = current_user.account_type == "admin"
+    is_seller = current_user.id == listing.seller_id
+    if not (is_admin or is_seller):
+        raise HTTPException(status_code=403, detail="Only the listing's seller can do this")
+
+
+@app.post("/listings/{listing_id}/auction-bids")
+def create_auction_bid(
+    listing_id: int,
+    payload: AuctionBidCreate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    listing = db.query(ListingModel).filter(ListingModel.id == listing_id).first()
+    if listing is None:
+        raise HTTPException(status_code=404, detail="Listing not found")
+
+    if current_user.id == listing.seller_id:
+        raise HTTPException(status_code=403, detail="You cannot bid on your own listing")
+
+    if payload.quantity <= 0:
+        raise HTTPException(status_code=400, detail="Quantity must be positive")
+    if payload.bid_price <= 0:
+        raise HTTPException(status_code=400, detail="Bid price must be positive")
+
+    bid = SecondaryAuctionBid(
+        listing_id=listing_id,
+        bidder_id=current_user.id,
+        quantity=payload.quantity,
+        bid_price=payload.bid_price,
+        note=payload.note,
+        status="submitted",
+        created_at=datetime.utcnow(),
+    )
+    db.add(bid)
+    db.commit()
+    db.refresh(bid)
+    return bid
+
+
+@app.get("/listings/{listing_id}/auction-bids")
+def get_auction_bids(
+    listing_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    listing = db.query(ListingModel).filter(ListingModel.id == listing_id).first()
+    if listing is None:
+        raise HTTPException(status_code=404, detail="Listing not found")
+
+    is_admin = current_user.account_type == "admin"
+    is_seller = current_user.id == listing.seller_id
+
+    query = db.query(SecondaryAuctionBid).filter(SecondaryAuctionBid.listing_id == listing_id)
+    if not (is_admin or is_seller):
+        # Sealed bid: a buyer only ever sees their own bid, never another
+        # buyer's terms - this is what keeps the mechanism a private
+        # negotiation rather than a public order book.
+        query = query.filter(SecondaryAuctionBid.bidder_id == current_user.id)
+
+    return query.all()
+
+
+@app.put("/auction-bids/{bid_id}/accept")
+def accept_auction_bid(
+    bid_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    bid = db.query(SecondaryAuctionBid).filter(SecondaryAuctionBid.id == bid_id).first()
+    if bid is None:
+        raise HTTPException(status_code=404, detail="Bid not found")
+
+    listing = db.query(ListingModel).filter(ListingModel.id == bid.listing_id).first()
+    _require_auction_seller_or_admin(listing, current_user)
+
+    if bid.status != "submitted":
+        raise HTTPException(status_code=400, detail=f"Cannot accept a bid with status '{bid.status}'")
+
+    transaction = Transaction(
+        listing_id=bid.listing_id,
+        buyer_id=bid.bidder_id,
+        seller_id=listing.seller_id,
+        quantity=bid.quantity,
+        agreed_price=bid.bid_price,
+        status="accepted",
+    )
+    db.add(transaction)
+    db.flush()
+
+    bid.status = "accepted"
+    bid.decided_at = datetime.utcnow()
+    bid.decided_by_user_id = current_user.id
+    bid.resulting_transaction_id = transaction.id
+
+    db.commit()
+    db.refresh(bid)
+    return bid
+
+
+@app.put("/auction-bids/{bid_id}/reject")
+def reject_auction_bid(
+    bid_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    bid = db.query(SecondaryAuctionBid).filter(SecondaryAuctionBid.id == bid_id).first()
+    if bid is None:
+        raise HTTPException(status_code=404, detail="Bid not found")
+
+    listing = db.query(ListingModel).filter(ListingModel.id == bid.listing_id).first()
+    _require_auction_seller_or_admin(listing, current_user)
+
+    if bid.status != "submitted":
+        raise HTTPException(status_code=400, detail=f"Cannot reject a bid with status '{bid.status}'")
+
+    bid.status = "rejected"
+    bid.decided_at = datetime.utcnow()
+    bid.decided_by_user_id = current_user.id
+
+    db.commit()
+    db.refresh(bid)
+    return bid
+
+
+@app.put("/auction-bids/{bid_id}/withdraw")
+def withdraw_auction_bid(
+    bid_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    bid = db.query(SecondaryAuctionBid).filter(SecondaryAuctionBid.id == bid_id).first()
+    if bid is None:
+        raise HTTPException(status_code=404, detail="Bid not found")
+
+    if current_user.id != bid.bidder_id:
+        raise HTTPException(status_code=403, detail="Only the bidder can withdraw their own bid")
+
+    if bid.status != "submitted":
+        raise HTTPException(status_code=400, detail=f"Cannot withdraw a bid with status '{bid.status}'")
+
+    bid.status = "withdrawn"
+    bid.decided_at = datetime.utcnow()
+    bid.decided_by_user_id = current_user.id
+
+    db.commit()
+    db.refresh(bid)
+    return bid
