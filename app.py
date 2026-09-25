@@ -30,6 +30,7 @@ from models import Transaction
 from models import DueDiligenceChecklistItem
 from models import SecondaryAuctionBid
 from models import ComplianceRuleChangeAlert
+from models import Message
 import escrow_client
 import email_client
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -409,6 +410,45 @@ def _check_investor_classification(rule, buyer, db):
         return "met"
 
     return "blocked" if rule.decision_if_unmet == "blocked" else "review"
+
+
+def _check_buyer_communication_eligible(buyer, listing, db):
+    """
+    M31 gap-closure item, 2026-09-25 - the gate behind Compliant-
+    Communication Gating. Deliberately narrower than assess_compliance():
+    only considers facts about the BUYER that bear on whether it is
+    legal to communicate with them about this specific offering - KYC
+    verification and investor classification. Ignores ownership
+    verification, transferability, and every other listing/seller-side
+    fact assess_compliance() also checks, since those have nothing to do
+    with whether contacting this buyer is permitted (confirmed with Eze
+    2026-09-25 rather than assumed, since reusing the full status would
+    have blocked a seller from messaging about their OWN unresolved
+    ownership record).
+
+    This is the one deliberate exception to KEVO's standing "compliance
+    never gates anything" posture (see M27's Ledger, M17's Deal Health
+    Score/Risk Radar, M27B's Liquidity Friction Indicator - all
+    explicitly informational-only). Messaging is the one place KEVO
+    actually blocks an action on a live compliance fact, because the
+    underlying concern here is solicitation, not deal administration.
+
+    Returns (eligible: bool, reason: str | None).
+    """
+    if buyer.kyc_status != "verified":
+        return False, "buyer KYC is not verified"
+
+    applicable_rules = find_applicable_rules(buyer, listing, db)
+
+    for rule in applicable_rules:
+        outcome = _check_investor_classification(rule, buyer, db)
+        if outcome in ("missing_evidence", "blocked", "review"):
+            return False, (
+                f"investor classification requirement not met for rule "
+                f"{rule.rule_code} (requires: {rule.investor_classification})"
+            )
+
+    return True, None
 
 
 def assess_compliance(buyer, listing, db):
@@ -1167,6 +1207,12 @@ def get_applicable_compliance_rules(
             detail="Buyer not found"
         )
 
+    if current_user.account_type != "admin" and current_user.id != buyer_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only view your own compliance rule matches"
+        )
+
     listing = db.query(ListingModel).filter(
         ListingModel.id == listing_id
     ).first()
@@ -1186,7 +1232,46 @@ def get_applicable_compliance_rules(
         "explanation": result["explanation"],
         "applicable_rule_codes": result["applicable_rule_codes"]
     }
-    
+
+
+@app.get("/me/eligibility-check/{listing_id}")
+def check_my_eligibility(
+    listing_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    M31 gap-closure item, 2026-09-25 - Eligibility Pre-Check, the first of
+    M31's four remaining pieces. A friendlier, self-only wrapper around the
+    real GET /compliance-rules/matches/{buyer_id}/{listing_id} engine
+    (fixed the same day to stop leaking other buyers' compliance verdicts)
+    - a buyer checks whether they'd currently pass compliance on a real
+    listing before expressing interest or negotiating, without needing to
+    know their own buyer_id. Always self-scoped; there is no way to check
+    another buyer's eligibility through this endpoint. Reuses
+    assess_compliance() directly - no new logic, no new table.
+    """
+    listing = db.query(ListingModel).filter(
+        ListingModel.id == listing_id
+    ).first()
+
+    if listing is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Listing not found"
+        )
+
+    result = assess_compliance(current_user, listing, db)
+
+    return {
+        "buyer_id": current_user.id,
+        "listing_id": listing.id,
+        "status": result["status"],
+        "explanation": result["explanation"],
+        "applicable_rule_codes": result["applicable_rule_codes"]
+    }
+
+
 @app.get("/transferability/listing/{listing_id}")
 def get_transferability_assessment(
     listing_id: int,
@@ -7656,3 +7741,267 @@ def mark_rule_change_alert_read(
         "is_read": alert.is_read,
         "read_at": alert.read_at.isoformat() if alert.read_at else None,
     }
+
+
+@app.get("/transactions/{transaction_id}/dependency-changes")
+def get_transaction_dependency_changes(
+    transaction_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    M27 gap-closure item, 2026-09-25 - the Deal Dependency Graph, the
+    third and final M27 piece. Per the project's own already-recorded
+    design: a diff layer over M15's Liquidity Path Engine, not a new
+    graph structure. Every call to the existing liquidity-path endpoints
+    already persists a full snapshot of LiquidityPathStep rows tagged
+    with a fresh run_id; this endpoint takes the most recent EXISTING
+    snapshot as "before", computes and persists one more fresh snapshot
+    as "after" (reusing build_liquidity_path exactly as the existing
+    endpoint does), and diffs them step by step (matched by step_type,
+    the stable identifier for each fixed pipeline stage). For every step
+    whose complete/determinability/reasons actually changed, it walks
+    the real blocking_step_id edges the engine already produces (forward,
+    from that step to whatever steps in the new run list it as their
+    blocker) to report exactly which downstream steps are affected -
+    read-only, on-demand, no new trigger points or background jobs,
+    matching KEVO's existing pattern of computing everything live.
+    """
+    transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if transaction is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    if current_user.account_type != "admin" and current_user.id not in (transaction.buyer_id, transaction.seller_id):
+        raise HTTPException(status_code=403, detail="You are not a party to this transaction")
+
+    listing = db.query(ListingModel).filter(ListingModel.id == transaction.listing_id).first()
+    if listing is None:
+        raise HTTPException(status_code=404, detail="Listing not found for this transaction")
+
+    previous_latest_row = db.query(LiquidityPathStep).filter(
+        LiquidityPathStep.transaction_id == transaction_id
+    ).order_by(LiquidityPathStep.id.desc()).first()
+
+    previous_run_id = previous_latest_row.run_id if previous_latest_row else None
+    previous_steps = []
+    if previous_run_id is not None:
+        previous_steps = db.query(LiquidityPathStep).filter(
+            LiquidityPathStep.transaction_id == transaction_id,
+            LiquidityPathStep.run_id == previous_run_id
+        ).all()
+
+    result = build_liquidity_path(listing, db, transaction_id=transaction.id)
+    ownership_record_id = result["ownership_record_id"]
+    new_run_id = uuid.uuid4().hex
+    computed_at = date.today()
+
+    new_steps = []
+    previous_step_id_in_new_run = None
+
+    for step in result["steps"]:
+        row = LiquidityPathStep(
+            listing_id=listing.id,
+            ownership_record_id=ownership_record_id,
+            transaction_id=transaction.id,
+            run_id=new_run_id,
+            computed_at=computed_at,
+            step_type=step["step_type"],
+            sequence_position=step["sequence_position"],
+            required=step["required"],
+            complete=step["complete"],
+            evidence_reference_type=step["evidence_reference_type"],
+            evidence_reference_id=step["evidence_reference_id"],
+            responsible_party=step["responsible_party"],
+            blocking_step_id=previous_step_id_in_new_run,
+            completion_trigger=step["completion_trigger"],
+            determinability=step["determinability"],
+            reasons=step["reasons"],
+            source_milestone=step["source_milestone"]
+        )
+        db.add(row)
+        db.flush()
+        previous_step_id_in_new_run = row.id
+        new_steps.append(row)
+
+    db.commit()
+
+    if previous_run_id is None:
+        return {
+            "transaction_id": transaction_id,
+            "previous_run_id": None,
+            "new_run_id": new_run_id,
+            "message": "No prior snapshot existed for this transaction - this run establishes the baseline. Call this endpoint again after something changes to see a real diff.",
+            "changed_steps": []
+        }
+
+    previous_by_type = {s.step_type: s for s in previous_steps}
+
+    children_by_blocking_id = {}
+    for s in new_steps:
+        if s.blocking_step_id is not None:
+            children_by_blocking_id.setdefault(s.blocking_step_id, []).append(s)
+
+    def walk_downstream(start_step_id):
+        downstream = []
+        seen = set()
+        frontier = [start_step_id]
+        while frontier:
+            current_id = frontier.pop()
+            for child in children_by_blocking_id.get(current_id, []):
+                if child.id in seen:
+                    continue
+                seen.add(child.id)
+                downstream.append(child)
+                frontier.append(child.id)
+        downstream.sort(key=lambda s: s.sequence_position)
+        return downstream
+
+    changed_steps = []
+    for new_step in new_steps:
+        old_step = previous_by_type.get(new_step.step_type)
+        if old_step is None:
+            continue
+        if (
+            old_step.complete == new_step.complete
+            and old_step.determinability == new_step.determinability
+            and old_step.reasons == new_step.reasons
+        ):
+            continue
+
+        downstream_steps = walk_downstream(new_step.id)
+
+        changed_steps.append({
+            "step_type": new_step.step_type,
+            "sequence_position": new_step.sequence_position,
+            "previous": {
+                "complete": old_step.complete,
+                "determinability": old_step.determinability,
+                "reasons": old_step.reasons,
+            },
+            "current": {
+                "complete": new_step.complete,
+                "determinability": new_step.determinability,
+                "reasons": new_step.reasons,
+            },
+            "downstream_steps_affected": [
+                {"step_type": d.step_type, "sequence_position": d.sequence_position}
+                for d in downstream_steps
+            ]
+        })
+
+    return {
+        "transaction_id": transaction_id,
+        "previous_run_id": previous_run_id,
+        "new_run_id": new_run_id,
+        "changed_steps": changed_steps
+    }
+
+
+class MessageCreate(BaseModel):
+    body: str
+
+
+@app.post("/transactions/{transaction_id}/messages")
+def create_message(
+    transaction_id: int,
+    payload: MessageCreate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    M31 gap-closure item, 2026-09-25 - send a message on a real
+    transaction. Party-only (buyer or seller), never admin - an admin
+    has no legitimate reason to send on someone else's behalf. Gated by
+    _check_buyer_communication_eligible(): if the transaction's buyer
+    fails the narrow buyer-only eligibility check, sending is rejected
+    for EITHER party, not just the buyer, since the underlying concern
+    is whether communication with this buyer is permitted at all.
+    """
+    transaction = db.query(Transaction).filter(
+        Transaction.id == transaction_id
+    ).first()
+
+    if transaction is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Transaction not found"
+        )
+
+    if current_user.id not in (transaction.buyer_id, transaction.seller_id):
+        raise HTTPException(
+            status_code=403,
+            detail="You are not a party to this transaction"
+        )
+
+    buyer = db.query(UserModel).filter(UserModel.id == transaction.buyer_id).first()
+    listing = db.query(ListingModel).filter(ListingModel.id == transaction.listing_id).first()
+
+    eligible, reason = _check_buyer_communication_eligible(buyer, listing, db)
+    if not eligible:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Messaging is gated: {reason}"
+        )
+
+    message = Message(
+        transaction_id=transaction.id,
+        sender_id=current_user.id,
+        body=payload.body,
+        created_at=datetime.utcnow(),
+    )
+    db.add(message)
+    db.commit()
+    db.refresh(message)
+
+    return {
+        "id": message.id,
+        "transaction_id": message.transaction_id,
+        "sender_id": message.sender_id,
+        "body": message.body,
+        "created_at": message.created_at
+    }
+
+
+@app.get("/transactions/{transaction_id}/messages")
+def list_messages(
+    transaction_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    M31 gap-closure item, 2026-09-25 - read a transaction's message
+    thread. Party-or-admin, matching every other transaction-scoped read
+    endpoint in KEVO (deal room, deal health, risk radar, liquidity
+    path). Read access itself is never gated - only sending is.
+    """
+    transaction = db.query(Transaction).filter(
+        Transaction.id == transaction_id
+    ).first()
+
+    if transaction is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Transaction not found"
+        )
+
+    is_party = current_user.id in (transaction.buyer_id, transaction.seller_id)
+    if not is_party and current_user.account_type != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="You are not a party to this transaction"
+        )
+
+    messages = db.query(Message).filter(
+        Message.transaction_id == transaction_id
+    ).order_by(Message.created_at.asc()).all()
+
+    return [
+        {
+            "id": m.id,
+            "transaction_id": m.transaction_id,
+            "sender_id": m.sender_id,
+            "body": m.body,
+            "created_at": m.created_at
+        }
+        for m in messages
+    ]
