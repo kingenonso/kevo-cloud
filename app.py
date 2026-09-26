@@ -1495,6 +1495,10 @@ class BankAccountRequest(BaseModel):
     account_number: str
 
 
+class RejectWithdrawalReasonRequest(BaseModel):
+    reason: str
+
+
 # Withdrawals at or above this amount require step-up authentication (an
 # emailed confirmation link) before they're processed - spec Section 15.
 # Easy constant to change; not yet configurable per-wallet.
@@ -1717,6 +1721,65 @@ def disable_my_bank_account(
 
     log_audit_event(db, current_user.id, "bank_account_disabled", target_type="wallet", target_id=current_user.id,
                      detail=f"bank_account_id={bank_account_id}")
+    return result
+
+
+@app.get("/admin/withdrawals/pending-review")
+def list_withdrawals_pending_review(
+    current_user: UserModel = Depends(get_current_user)
+):
+    """Admin-only: lists every withdrawal currently held for manual review (spec Section 15 risk scoring), across all wallets, oldest first."""
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can view withdrawals pending review")
+
+    try:
+        return wallet_client.list_pending_review_withdrawals()
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+
+
+@app.put("/admin/withdrawals/{kevo_user_id}/{withdrawal_id}/approve")
+def approve_withdrawal_after_review(
+    kevo_user_id: int,
+    withdrawal_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """Admin-only: approves a withdrawal held for manual review. The wallet service independently re-checks that withdrawal_id really belongs to kevo_user_id, and re-checks the wallet's current balance/status before completing it."""
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can approve a withdrawal")
+
+    try:
+        result = wallet_client.approve_withdrawal(kevo_user_id, withdrawal_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+
+    log_audit_event(db, current_user.id, "withdrawal_approved_after_review", target_type="wallet", target_id=kevo_user_id,
+                     detail=f"withdrawal_id={withdrawal_id} result_status={result.get('status')}")
+    db.commit()
+    return result
+
+
+@app.put("/admin/withdrawals/{kevo_user_id}/{withdrawal_id}/reject")
+def reject_withdrawal_after_review(
+    kevo_user_id: int,
+    withdrawal_id: int,
+    request: RejectWithdrawalReasonRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """Admin-only: rejects a withdrawal held for manual review."""
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can reject a withdrawal")
+
+    try:
+        result = wallet_client.reject_withdrawal(kevo_user_id, withdrawal_id, request.reason)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+
+    log_audit_event(db, current_user.id, "withdrawal_rejected_after_review", target_type="wallet", target_id=kevo_user_id,
+                     detail=f"withdrawal_id={withdrawal_id} reason={request.reason}")
+    db.commit()
     return result
 
 
