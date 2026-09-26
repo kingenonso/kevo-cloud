@@ -1,122 +1,75 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { Routes, Route } from "react-router-dom"
+import { AppShell } from "@/components/layout/AppShell"
+import { PlaceholderPage } from "@/pages/Placeholder"
+import { LoginPage } from "@/pages/Login"
+import { DashboardPage } from "@/pages/Dashboard"
+import { WalletPage } from "@/pages/Wallet"
+import { ConfirmWithdrawalPage } from "@/pages/ConfirmWithdrawal"
+import { MyListingsPage } from "@/pages/MyListings"
+import { TransactionsPage } from "@/pages/Transactions"
+import { RequireAuth } from "@/components/auth/RequireAuth"
 
-function App() {
-  const [count, setCount] = useState(0)
-
+function Page({ title }: { title: string }) {
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+    <AppShell title={title}>
+      <PlaceholderPage title={title} />
+    </AppShell>
   )
 }
 
-export default App
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route element={<RequireAuth />}>
+        <Route
+          path="/"
+          element={
+            <AppShell title="Dashboard">
+              <DashboardPage />
+            </AppShell>
+          }
+        />
+        <Route
+          path="/wallet"
+          element={
+            <AppShell title="Wallet">
+              <WalletPage />
+            </AppShell>
+          }
+        />
+        <Route path="/confirm-withdrawal" element={<ConfirmWithdrawalPage />} />
+        <Route
+          path="/listings"
+          element={
+            <AppShell title="My Listings">
+              <MyListingsPage />
+            </AppShell>
+          }
+        />
+        <Route
+          path="/transactions"
+          element={
+            <AppShell title="Transactions">
+              <TransactionsPage />
+            </AppShell>
+          }
+        />
+        <Route path="/deal-room" element={<Page title="Deal Room" />} />
+        <Route path="/deal-room/:transactionId" element={<Page title="Deal Room" />} />
+        <Route path="/lending" element={<Page title="Lending" />} />
+        <Route path="/fx-settlement" element={<Page title="FX Settlement" />} />
+        <Route path="/option-funding" element={<Page title="Option Funding" />} />
+        <Route path="/tender-offers" element={<Page title="Tender Offers" />} />
+        <Route path="/compliance-ledger" element={<Page title="Compliance Ledger" />} />
+        <Route path="/kyc" element={<Page title="KYC & AML" />} />
+        <Route path="/rofr" element={<Page title="ROFR" />} />
+        <Route path="/admin/withdrawal-review" element={<Page title="Withdrawal Review" />} />
+        <Route path="/deal-alerts" element={<Page title="Deal Alerts" />} />
+        <Route path="/risk-radar" element={<Page title="Risk Radar" />} />
+        <Route path="/liquidity-roadmap" element={<Page title="Liquidity Roadmap" />} />
+        <Route path="/settings" element={<Page title="Settings" />} />
+      </Route>
+    </Routes>
+  )
+}
