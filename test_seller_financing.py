@@ -30,8 +30,10 @@ from sqlalchemy.pool import StaticPool
 from models import (
     Base, User as UserModel, Listing as ListingModel, Transaction,
     SellerFinancingAgreement, SellerFinancingPayment,
+    OwnershipRecord, PositionEvent,
 )
 from app import app, get_db, hash_password, create_access_token
+from unittest.mock import patch
 
 
 @pytest.fixture()
@@ -65,6 +67,36 @@ def client(db_session):
 
 def auth_headers(user):
     return {"Authorization": f"Bearer {create_access_token(user.id)}"}
+
+
+@pytest.fixture()
+def mock_escrow_client():
+    """
+    These tests touch settlement records only incidentally, to check the
+    seller-financing gate on share transfer -- not the escrow integration
+    itself -- so real network calls to Escrow.com are replaced with fakes.
+    """
+    with patch("escrow_client.create_transaction") as mock_create, \
+         patch("escrow_client.agree_as_customer") as mock_agree, \
+         patch("escrow_client.mark_shipped") as mock_ship, \
+         patch("escrow_client.mark_received") as mock_receive, \
+         patch("escrow_client.get_transaction") as mock_get:
+        mock_create.return_value = {"id": 999999}
+        mock_agree.return_value = {"id": 999999}
+        mock_ship.return_value = {"id": 999999}
+        mock_receive.return_value = {"id": 999999}
+        mock_get.return_value = {
+            "items": [{"schedule": [{"status": {
+                "payment_received": False, "disbursed_to_beneficiary": False
+            }}]}]
+        }
+        yield {
+            "create_transaction": mock_create,
+            "agree_as_customer": mock_agree,
+            "mark_shipped": mock_ship,
+            "mark_received": mock_receive,
+            "get_transaction": mock_get,
+        }
 
 
 def make_user(db, suffix="1", role="buyer", account_type="participant", kyc_status="not_started"):
@@ -509,7 +541,7 @@ def test_confirming_payment_after_default_rejected(client, db_session):
     assert resp.status_code == 400
 
 
-def test_confirm_shares_transferable_blocked_while_financing_active(client, db_session):
+def test_confirm_shares_transferable_blocked_while_financing_active(client, db_session, mock_escrow_client):
     seller = make_user(db_session, "1", role="seller")
     buyer = make_user(db_session, "2", role="buyer")
     admin = make_user(db_session, "3", account_type="admin")
@@ -525,7 +557,7 @@ def test_confirm_shares_transferable_blocked_while_financing_active(client, db_s
     assert "seller financing" in resp.json()["detail"].lower()
 
 
-def test_confirming_last_payment_auto_marks_settlement_shares_transferable(client, db_session):
+def test_confirming_last_payment_auto_marks_settlement_shares_transferable(client, db_session, mock_escrow_client):
     seller = make_user(db_session, "1", role="seller")
     buyer = make_user(db_session, "2", role="buyer")
     admin = make_user(db_session, "3", account_type="admin")
@@ -543,3 +575,33 @@ def test_confirming_last_payment_auto_marks_settlement_shares_transferable(clien
     settlement = client.get(f"/settlement-records/{settlement_id}", headers=auth_headers(admin)).json()
     assert settlement["shares_confirmed_transferable"] is True
     assert settlement["shares_confirmed_transferable_at"] is not None
+
+
+
+def test_confirming_payment_creates_position_event_when_ownership_record_exists(client, db_session):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    listing = make_listing(db_session, seller, quantity=100)
+    ownership_record = OwnershipRecord(
+        seller_id=seller.id, listing_id=listing.id, company="Acme Inc",
+        asset_type="Private Shares", quantity=100, verification_status="verified",
+    )
+    db_session.add(ownership_record)
+    db_session.commit()
+    db_session.refresh(ownership_record)
+
+    txn = make_transaction(db_session, listing, buyer, quantity=100, status="accepted")
+    agreement = _create_agreement(client, seller, txn, term_months=4, principal_amount=400.0)
+    payments = client.get(f"/seller-financing-agreements/{agreement['id']}/payments", headers=auth_headers(seller)).json()
+
+    resp = client.put(f"/seller-financing-agreements/{agreement['id']}/payments/{payments[0]['id']}/confirm", headers=auth_headers(seller))
+    assert resp.status_code == 200
+
+    events = db_session.query(PositionEvent).filter(PositionEvent.listing_id == listing.id).all()
+    assert len(events) == 1
+    event = events[0]
+    assert event.event_type == "partial_transfer"
+    assert event.quantity_before == 100
+    assert event.quantity_after == 75
+    assert event.verification_status == "verified"
+    assert event.ownership_record_id == ownership_record.id
