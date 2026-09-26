@@ -5822,6 +5822,19 @@ def confirm_shares_transferable(
     settlement_record = db.query(SettlementRecord).filter(SettlementRecord.id == settlement_record_id).first()
     if settlement_record is None:
         raise HTTPException(status_code=404, detail="Settlement record not found")
+    financing_agreement = db.query(SellerFinancingAgreement).filter(
+        SellerFinancingAgreement.transaction_id == settlement_record.transaction_id
+    ).first()
+    if financing_agreement is not None and financing_agreement.status != "completed":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"This transaction is under seller financing (agreement {financing_agreement.id}, "
+                f"status '{financing_agreement.status}'). Share transfer is gated to the confirmed "
+                f"payment schedule, not a manual admin flag. Progress so far: "
+                f"{financing_agreement.quantity_transferred} of the transaction's shares transferred."
+            )
+        )
     settlement_record.shares_confirmed_transferable = True
     settlement_record.shares_confirmed_transferable_at = datetime.utcnow()
     if notes is not None:
@@ -7082,6 +7095,8 @@ def confirm_seller_financing_payment(
     transaction = db.query(Transaction).filter(Transaction.id == agreement.transaction_id).first()
     if current_user.account_type != "admin" and current_user.id != transaction.seller_id:
         raise HTTPException(status_code=403, detail="Only the seller (who is owed this payment) or an admin can confirm it was received")
+    if agreement.status != "active":
+        raise HTTPException(status_code=400, detail=f"Cannot confirm a payment on an agreement that is '{agreement.status}', not active")
     payment = db.query(SellerFinancingPayment).filter(
         SellerFinancingPayment.id == payment_id,
         SellerFinancingPayment.agreement_id == agreement_id
@@ -7101,10 +7116,60 @@ def confirm_seller_financing_payment(
         SellerFinancingPayment.agreement_id == agreement_id,
         SellerFinancingPayment.status != "paid"
     ).count()
+
+    all_payments = db.query(SellerFinancingPayment).filter(
+        SellerFinancingPayment.agreement_id == agreement_id
+    ).all()
+    total_scheduled_amount = sum(float(p.amount_due) for p in all_payments)
+    total_paid_amount = sum(
+        float(p.paid_amount if p.paid_amount is not None else p.amount_due)
+        for p in all_payments if p.status == "paid"
+    )
+
     if remaining == 0:
         agreement.status = "completed"
-        db.commit()
+        new_quantity_transferred = transaction.quantity
+    elif total_scheduled_amount > 0:
+        fraction_paid = total_paid_amount / total_scheduled_amount
+        new_quantity_transferred = min(int(transaction.quantity * fraction_paid), transaction.quantity)
+    else:
+        new_quantity_transferred = agreement.quantity_transferred
 
+    increment = new_quantity_transferred - agreement.quantity_transferred
+    if increment > 0:
+        listing = db.query(ListingModel).filter(ListingModel.id == transaction.listing_id).first()
+        if listing is not None:
+            position = build_position_events(listing, db)
+            if position["status"] == "ok" and position["current_quantity"] is not None:
+                ownership_record = db.query(OwnershipRecord).filter(
+                    OwnershipRecord.listing_id == listing.id
+                ).first()
+                quantity_before = position["current_quantity"]
+                quantity_after = quantity_before - increment
+                db.add(PositionEvent(
+                    listing_id=listing.id,
+                    ownership_record_id=ownership_record.id if ownership_record is not None else None,
+                    event_type="partial_transfer",
+                    effective_date=date.today(),
+                    source="seller_financing_payment_confirmation",
+                    submitting_party="system",
+                    verification_status="verified",
+                    quantity_before=quantity_before,
+                    quantity_after=quantity_after,
+                    notes=f"Seller financing agreement {agreement.id}, installment {payment.installment_number} confirmed paid — proportional transfer of {increment} unit(s) to the buyer.",
+                    source_reference=f"seller_financing_payment:{payment.id}"
+                ))
+        agreement.quantity_transferred = new_quantity_transferred
+
+    if remaining == 0:
+        settlement_record = db.query(SettlementRecord).filter(
+            SettlementRecord.transaction_id == agreement.transaction_id
+        ).first()
+        if settlement_record is not None and not settlement_record.shares_confirmed_transferable:
+            settlement_record.shares_confirmed_transferable = True
+            settlement_record.shares_confirmed_transferable_at = datetime.utcnow()
+
+    db.commit()
     db.refresh(payment)
     return payment
 
