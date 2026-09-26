@@ -168,3 +168,31 @@ def capture_lock(buyer_kevo_user_id: int, marketplace_transaction_id: int, selle
         json=payload, headers=_headers(), timeout=15
     ))
     return response.json()
+
+
+def list_pending_review_withdrawals() -> list:
+    """Admin-only: lists every withdrawal currently held for manual review, across all wallets, oldest first."""
+    response = _check(requests.get(
+        f"{_base_url()}/internal/withdrawals/pending-review",
+        headers=_headers(), timeout=15
+    ))
+    return response.json()
+
+
+def approve_withdrawal(kevo_user_id: int, withdrawal_id: int) -> dict:
+    """Admin-only: approves a withdrawal that was held for manual review. Re-checks the wallet's current balance and status before completing it."""
+    response = _check(requests.put(
+        f"{_base_url()}/internal/wallets/{kevo_user_id}/withdrawals/{withdrawal_id}/approve",
+        headers=_headers(), timeout=15
+    ))
+    return response.json()
+
+
+def reject_withdrawal(kevo_user_id: int, withdrawal_id: int, reason: str) -> dict:
+    """Admin-only: rejects a withdrawal that was held for manual review."""
+    payload = {"reason": reason}
+    response = _check(requests.put(
+        f"{_base_url()}/internal/wallets/{kevo_user_id}/withdrawals/{withdrawal_id}/reject",
+        json=payload, headers=_headers(), timeout=15
+    ))
+    return response.json()
