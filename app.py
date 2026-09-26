@@ -1495,6 +1495,10 @@ class BankAccountRequest(BaseModel):
     account_number: str
 
 
+class ConnectFinalizeRequest(BaseModel):
+    session_id: str
+
+
 class RejectWithdrawalReasonRequest(BaseModel):
     reason: str
 
@@ -1722,6 +1726,80 @@ def disable_my_bank_account(
     log_audit_event(db, current_user.id, "bank_account_disabled", target_type="wallet", target_id=current_user.id,
                      detail=f"bank_account_id={bank_account_id}")
     return result
+
+
+@app.post("/me/bank-accounts/connect-session")
+def start_bank_connection(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    log_audit_event(db, current_user.id, "bank_account_connect_initiated", target_type="wallet", target_id=current_user.id)
+    try:
+        result = wallet_client.create_bank_connection_session(current_user.id, current_user.name)
+    except RuntimeError as e:
+        log_audit_event(db, current_user.id, "bank_account_connect_failed", target_type="wallet", target_id=current_user.id,
+                         detail=str(e))
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+    return result
+
+
+@app.post("/me/bank-accounts/connect-finalize")
+def finalize_bank_connection(
+    request: ConnectFinalizeRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    try:
+        result = wallet_client.finalize_bank_connection(current_user.id, request.session_id, current_user.name)
+    except RuntimeError as e:
+        log_audit_event(db, current_user.id, "bank_account_connect_finalize_failed", target_type="wallet", target_id=current_user.id,
+                         detail=str(e))
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+
+    log_audit_event(db, current_user.id, "bank_account_connected", target_type="wallet", target_id=current_user.id,
+                     detail=f"linked_count={len(result)}")
+    return result
+
+
+@app.post("/me/connect/account")
+def create_my_connect_account(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    # TODO: country is hardcoded to "US" as a placeholder to prove the
+    # mechanism works in Stripe test mode. Mapping a real user's actual
+    # jurisdiction (current_user.jurisdiction) to a Stripe-supported
+    # connected-account country is a separate, not-yet-made decision.
+    log_audit_event(db, current_user.id, "connect_account_initiated", target_type="wallet", target_id=current_user.id)
+    try:
+        result = wallet_client.create_connect_account(current_user.id, "US", current_user.email)
+    except RuntimeError as e:
+        log_audit_event(db, current_user.id, "connect_account_failed", target_type="wallet", target_id=current_user.id,
+                         detail=str(e))
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+    return result
+
+
+@app.post("/me/connect/onboarding-link")
+def create_my_connect_onboarding_link(
+    current_user: UserModel = Depends(get_current_user)
+):
+    return_url = "http://localhost:5173/app/wallet"
+    try:
+        result = wallet_client.create_connect_onboarding_link(current_user.id, return_url, return_url)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+    return result
+
+
+@app.get("/me/connect/status")
+def get_my_connect_status(
+    current_user: UserModel = Depends(get_current_user)
+):
+    try:
+        return wallet_client.get_connect_status(current_user.id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
 
 
 @app.get("/admin/withdrawals/pending-review")
