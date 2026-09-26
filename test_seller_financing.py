@@ -449,3 +449,97 @@ def test_get_payments_stranger_403(client, db_session):
 def test_get_unauthenticated_401(client, db_session):
     resp = client.get("/seller-financing-agreements")
     assert resp.status_code == 401
+
+
+# --- Proportional share transfer (2026-09-26) ---
+
+def test_confirming_payment_proportionally_transfers_shares(client, db_session):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    listing = make_listing(db_session, seller, quantity=100)
+    txn = make_transaction(db_session, listing, buyer, quantity=100, status="accepted")
+    agreement = _create_agreement(client, seller, txn, term_months=4, principal_amount=400.0)
+    payments = client.get(f"/seller-financing-agreements/{agreement['id']}/payments", headers=auth_headers(seller)).json()
+    assert len(payments) == 4
+
+    resp = client.put(f"/seller-financing-agreements/{agreement['id']}/payments/{payments[0]['id']}/confirm", headers=auth_headers(seller))
+    assert resp.status_code == 200
+    current = client.get(f"/seller-financing-agreements/{agreement['id']}", headers=auth_headers(seller)).json()
+    assert current["quantity_transferred"] == 25
+
+    resp = client.put(f"/seller-financing-agreements/{agreement['id']}/payments/{payments[1]['id']}/confirm", headers=auth_headers(seller))
+    assert resp.status_code == 200
+    current = client.get(f"/seller-financing-agreements/{agreement['id']}", headers=auth_headers(seller)).json()
+    assert current["quantity_transferred"] == 50
+
+
+def test_confirming_final_payment_transfers_full_quantity(client, db_session):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    listing = make_listing(db_session, seller, quantity=99)
+    txn = make_transaction(db_session, listing, buyer, quantity=99, status="accepted")
+    agreement = _create_agreement(client, seller, txn, term_months=3, principal_amount=297.0)
+    payments = client.get(f"/seller-financing-agreements/{agreement['id']}/payments", headers=auth_headers(seller)).json()
+
+    for p in payments:
+        resp = client.put(f"/seller-financing-agreements/{agreement['id']}/payments/{p['id']}/confirm", headers=auth_headers(seller))
+        assert resp.status_code == 200
+
+    final = client.get(f"/seller-financing-agreements/{agreement['id']}", headers=auth_headers(seller)).json()
+    assert final["status"] == "completed"
+    assert final["quantity_transferred"] == 99
+
+
+def test_confirming_payment_after_default_rejected(client, db_session):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    listing = make_listing(db_session, seller, quantity=100)
+    txn = make_transaction(db_session, listing, buyer, quantity=100, status="accepted")
+    agreement = _create_agreement(client, seller, txn, term_months=2, principal_amount=200.0)
+    payments = client.get(f"/seller-financing-agreements/{agreement['id']}/payments", headers=auth_headers(seller)).json()
+
+    default_resp = client.put(
+        f"/seller-financing-agreements/{agreement['id']}/default",
+        params={"reason": "buyer stopped paying"},
+        headers=auth_headers(seller)
+    )
+    assert default_resp.status_code == 200
+
+    resp = client.put(f"/seller-financing-agreements/{agreement['id']}/payments/{payments[0]['id']}/confirm", headers=auth_headers(seller))
+    assert resp.status_code == 400
+
+
+def test_confirm_shares_transferable_blocked_while_financing_active(client, db_session):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    admin = make_user(db_session, "3", account_type="admin")
+    listing = make_listing(db_session, seller, quantity=100)
+    txn = make_transaction(db_session, listing, buyer, quantity=100, status="accepted")
+    settlement_resp = client.post("/settlement-records", params={"transaction_id": txn.id}, headers=auth_headers(admin))
+    assert settlement_resp.status_code == 200
+    settlement_id = settlement_resp.json()["id"]
+    _create_agreement(client, seller, txn, term_months=2, principal_amount=200.0)
+
+    resp = client.put(f"/settlement-records/{settlement_id}/confirm-shares-transferable", headers=auth_headers(admin))
+    assert resp.status_code == 400
+    assert "seller financing" in resp.json()["detail"].lower()
+
+
+def test_confirming_last_payment_auto_marks_settlement_shares_transferable(client, db_session):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    admin = make_user(db_session, "3", account_type="admin")
+    listing = make_listing(db_session, seller, quantity=100)
+    txn = make_transaction(db_session, listing, buyer, quantity=100, status="accepted")
+    settlement_resp = client.post("/settlement-records", params={"transaction_id": txn.id}, headers=auth_headers(admin))
+    settlement_id = settlement_resp.json()["id"]
+    agreement = _create_agreement(client, seller, txn, term_months=1, principal_amount=100.0)
+    payments = client.get(f"/seller-financing-agreements/{agreement['id']}/payments", headers=auth_headers(seller)).json()
+    assert len(payments) == 1
+
+    resp = client.put(f"/seller-financing-agreements/{agreement['id']}/payments/{payments[0]['id']}/confirm", headers=auth_headers(seller))
+    assert resp.status_code == 200
+
+    settlement = client.get(f"/settlement-records/{settlement_id}", headers=auth_headers(admin)).json()
+    assert settlement["shares_confirmed_transferable"] is True
+    assert settlement["shares_confirmed_transferable_at"] is not None

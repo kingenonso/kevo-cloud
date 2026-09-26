@@ -829,6 +829,7 @@ class SellerFinancingAgreement(Base):
 
     # Protection System extension.
     restricts_transfer_until_paid = Column(Boolean, nullable=False, default=False)
+    quantity_transferred = Column(Integer, nullable=False, default=0)
 
 
 class SellerFinancingPayment(Base):
