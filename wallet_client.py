@@ -123,6 +123,55 @@ def verify_bank_account(kevo_user_id: int, bank_account_id: int) -> dict:
     return response.json()
 
 
+def create_bank_connection_session(kevo_user_id: int, account_holder_name: str) -> dict:
+    """Starts a real Stripe Financial Connections session so the user can log into their real bank and prove they own the account. Returns a clientSecret the frontend hands to Stripe.js."""
+    payload = {"accountHolderName": account_holder_name}
+    response = _check(requests.post(
+        f"{_base_url()}/internal/wallets/{kevo_user_id}/bank-accounts/connect-session",
+        json=payload, headers=_headers(), timeout=15
+    ))
+    return response.json()
+
+
+def finalize_bank_connection(kevo_user_id: int, session_id: str, account_holder_name: str) -> list:
+    """After the user completes the Stripe bank-login flow, retrieves the verified account(s) from that session and saves them to the user's wallet."""
+    payload = {"sessionId": session_id, "accountHolderName": account_holder_name}
+    response = _check(requests.post(
+        f"{_base_url()}/internal/wallets/{kevo_user_id}/bank-accounts/connect-finalize",
+        json=payload, headers=_headers(), timeout=15
+    ))
+    return response.json()
+
+
+def create_connect_account(kevo_user_id: int, country: str, email: str) -> dict:
+    """Creates (or reuses) this user's real Stripe Connect account so they can eventually receive real payouts."""
+    payload = {"country": country, "email": email}
+    response = _check(requests.post(
+        f"{_base_url()}/internal/wallets/{kevo_user_id}/connect/account",
+        json=payload, headers=_headers(), timeout=15
+    ))
+    return response.json()
+
+
+def create_connect_onboarding_link(kevo_user_id: int, refresh_url: str, return_url: str) -> dict:
+    """Returns a real, one-time-use Stripe-hosted URL where the user enters their own KYC/identity details directly with Stripe."""
+    payload = {"refreshUrl": refresh_url, "returnUrl": return_url}
+    response = _check(requests.post(
+        f"{_base_url()}/internal/wallets/{kevo_user_id}/connect/onboarding-link",
+        json=payload, headers=_headers(), timeout=15
+    ))
+    return response.json()
+
+
+def get_connect_status(kevo_user_id: int) -> dict:
+    """Checks with Stripe directly whether this user has finished onboarding and can receive real payouts yet."""
+    response = _check(requests.get(
+        f"{_base_url()}/internal/wallets/{kevo_user_id}/connect/status",
+        headers=_headers(), timeout=15
+    ))
+    return response.json()
+
+
 def disable_bank_account(kevo_user_id: int, bank_account_id: int) -> dict:
     """Disables a bank account so it can no longer receive withdrawals."""
     response = _check(requests.post(

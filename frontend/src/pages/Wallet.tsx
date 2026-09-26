@@ -9,8 +9,11 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog"
+import { loadStripe } from "@stripe/stripe-js"
 import { apiFetch } from "@/lib/auth"
 import { formatMoney } from "@/lib/format"
+
+const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY as string)
 
 type WalletBalance = {
   kevoUserId: number
@@ -73,11 +76,8 @@ export function WalletPage() {
   const [withdrawNotice, setWithdrawNotice] = useState<string | null>(null)
 
   const [addAccountOpen, setAddAccountOpen] = useState(false)
-  const [holderName, setHolderName] = useState("")
-  const [bankName, setBankName] = useState("")
-  const [accountNumber, setAccountNumber] = useState("")
-  const [addAccountSubmitting, setAddAccountSubmitting] = useState(false)
-  const [addAccountError, setAddAccountError] = useState<string | null>(null)
+  const [connectSubmitting, setConnectSubmitting] = useState(false)
+  const [connectError, setConnectError] = useState<string | null>(null)
 
   const [accountActionId, setAccountActionId] = useState<number | null>(null)
 
@@ -192,48 +192,52 @@ export function WalletPage() {
     }
   }
 
-  async function handleAddAccount(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setAddAccountError(null)
-    if (!holderName.trim() || !bankName.trim() || !accountNumber.trim()) {
-      setAddAccountError("Fill in all fields.")
-      return
-    }
-    setAddAccountSubmitting(true)
+  async function handleConnectBank() {
+    setConnectError(null)
+    setConnectSubmitting(true)
     try {
-      const response = await apiFetch("/me/bank-accounts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          account_holder_name: holderName,
-          bank_name: bankName,
-          account_number: accountNumber,
-        }),
-      })
-      if (!response.ok) {
-        const data = await response.json().catch(() => null)
-        setAddAccountError(data?.detail ?? "Could not add this account.")
+      const sessionResponse = await apiFetch("/me/bank-accounts/connect-session", { method: "POST" })
+      const sessionData = await sessionResponse.json().catch(() => null)
+      if (!sessionResponse.ok || !sessionData?.clientSecret) {
+        setConnectError(sessionData?.detail ?? "Could not start bank connection.")
         return
       }
+
+      const stripe = await stripePromise
+      if (!stripe) {
+        setConnectError("Could not load Stripe. Please try again.")
+        return
+      }
+
+      const result = await stripe.collectFinancialConnectionsAccounts({
+        clientSecret: sessionData.clientSecret,
+      })
+      if (result.error) {
+        setConnectError(result.error.message ?? "Bank connection was not completed.")
+        return
+      }
+      if (!result.financialConnectionsSession) {
+        setConnectError("Bank connection was not completed.")
+        return
+      }
+
+      const finalizeResponse = await apiFetch("/me/bank-accounts/connect-finalize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: result.financialConnectionsSession.id }),
+      })
+      if (!finalizeResponse.ok) {
+        const data = await finalizeResponse.json().catch(() => null)
+        setConnectError(data?.detail ?? "Could not save this bank account.")
+        return
+      }
+
       setAddAccountOpen(false)
-      setHolderName("")
-      setBankName("")
-      setAccountNumber("")
       await loadBankAccounts()
     } catch {
-      setAddAccountError("Could not reach the server. Please check your connection.")
+      setConnectError("Could not reach the server. Please check your connection.")
     } finally {
-      setAddAccountSubmitting(false)
-    }
-  }
-
-  async function handleVerify(accountId: number) {
-    setAccountActionId(accountId)
-    try {
-      await apiFetch(`/me/bank-accounts/${accountId}/verify`, { method: "POST" })
-      await loadBankAccounts()
-    } finally {
-      setAccountActionId(null)
+      setConnectSubmitting(false)
     }
   }
 
@@ -343,16 +347,6 @@ export function WalletPage() {
                   <Badge variant="outline" className={bankAccountStatusClasses(account.status)}>
                     {capitalizeStatus(account.status)}
                   </Badge>
-                  {account.status === "UNVERIFIED" && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={accountActionId === account.id}
-                      onClick={() => handleVerify(account.id)}
-                    >
-                      Verify
-                    </Button>
-                  )}
                   {account.status !== "DISABLED" && (
                     <Button
                       size="sm"
@@ -475,38 +469,24 @@ export function WalletPage() {
       <Dialog open={addAccountOpen} onOpenChange={setAddAccountOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Add bank account</DialogTitle>
+            <DialogTitle>Connect bank account</DialogTitle>
           </DialogHeader>
-          <form onSubmit={handleAddAccount} className="space-y-4">
-            <div>
-              <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Account Holder Name
-              </label>
-              <Input value={holderName} onChange={(e) => setHolderName(e.target.value)} required />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Bank Name
-              </label>
-              <Input value={bankName} onChange={(e) => setBankName(e.target.value)} required />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Account Number
-              </label>
-              <Input
-                value={accountNumber}
-                onChange={(e) => setAccountNumber(e.target.value)}
-                required
-              />
-            </div>
-            {addAccountError && <p className="text-sm text-destructive">{addAccountError}</p>}
-            <DialogFooter>
-              <Button type="submit" disabled={addAccountSubmitting} className="w-full">
-                {addAccountSubmitting ? "Adding..." : "Add Account"}
-              </Button>
-            </DialogFooter>
-          </form>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              You'll be taken to a secure Stripe window to log into your bank. KEVO never sees or
+              stores your bank login details - Stripe confirms account ownership directly with
+              your bank and only sends back the account's name and last four digits.
+            </p>
+            {connectError && <p className="text-sm text-destructive">{connectError}</p>}
+            <Button
+              type="button"
+              disabled={connectSubmitting}
+              className="w-full"
+              onClick={handleConnectBank}
+            >
+              {connectSubmitting ? "Connecting..." : "Connect with Stripe"}
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
