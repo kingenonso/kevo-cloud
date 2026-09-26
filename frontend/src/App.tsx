@@ -7,6 +7,7 @@ import { WalletPage } from "@/pages/Wallet"
 import { ConfirmWithdrawalPage } from "@/pages/ConfirmWithdrawal"
 import { MyListingsPage } from "@/pages/MyListings"
 import { TransactionsPage } from "@/pages/Transactions"
+import { DealRoomPage } from "@/pages/DealRoom"
 import { RequireAuth } from "@/components/auth/RequireAuth"
 
 function Page({ title }: { title: string }) {
@@ -22,41 +23,13 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route element={<RequireAuth />}>
-        <Route
-          path="/"
-          element={
-            <AppShell title="Dashboard">
-              <DashboardPage />
-            </AppShell>
-          }
-        />
-        <Route
-          path="/wallet"
-          element={
-            <AppShell title="Wallet">
-              <WalletPage />
-            </AppShell>
-          }
-        />
+        <Route path="/" element={<AppShell title="Dashboard"><DashboardPage /></AppShell>} />
+        <Route path="/wallet" element={<AppShell title="Wallet"><WalletPage /></AppShell>} />
         <Route path="/confirm-withdrawal" element={<ConfirmWithdrawalPage />} />
-        <Route
-          path="/listings"
-          element={
-            <AppShell title="My Listings">
-              <MyListingsPage />
-            </AppShell>
-          }
-        />
-        <Route
-          path="/transactions"
-          element={
-            <AppShell title="Transactions">
-              <TransactionsPage />
-            </AppShell>
-          }
-        />
+        <Route path="/listings" element={<AppShell title="My Listings"><MyListingsPage /></AppShell>} />
+        <Route path="/transactions" element={<AppShell title="Transactions"><TransactionsPage /></AppShell>} />
         <Route path="/deal-room" element={<Page title="Deal Room" />} />
-        <Route path="/deal-room/:transactionId" element={<Page title="Deal Room" />} />
+        <Route path="/deal-room/:transactionId" element={<AppShell title="Deal Room"><DealRoomPage /></AppShell>} />
         <Route path="/lending" element={<Page title="Lending" />} />
         <Route path="/fx-settlement" element={<Page title="FX Settlement" />} />
         <Route path="/option-funding" element={<Page title="Option Funding" />} />
