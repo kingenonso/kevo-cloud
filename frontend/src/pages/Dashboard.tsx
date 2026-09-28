@@ -1,7 +1,5 @@
-import { useState } from "react"
 import { useAuth } from "@/contexts/AuthContext"
-import { apiFetch } from "@/lib/auth"
-import { capitalize, formatRoles } from "@/lib/format"
+import { capitalize } from "@/lib/format"
 
 const KYC_STYLES: Record<string, string> = {
   verified: "bg-primary/10 text-primary border-primary/20",
@@ -24,40 +22,11 @@ function kycLabel(status: string | null): string {
     .join(" ")
 }
 
-const ALL_ROLES = ["seller", "buyer"] as const
-
 export function DashboardPage() {
-  const { user, refresh } = useAuth()
-  const [switchingRole, setSwitchingRole] = useState<string | null>(null)
-  const [switchError, setSwitchError] = useState<string | null>(null)
+  const { user } = useAuth()
 
   if (!user) {
     return null
-  }
-
-  const missingRoles = ALL_ROLES.filter((role) => !user.roles.includes(role))
-  const isVerified = user.kyc_status === "verified"
-
-  async function handleAddRole(role: string) {
-    setSwitchError(null)
-    setSwitchingRole(role)
-    try {
-      const response = await apiFetch("/me/roles/switch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role }),
-      })
-      if (!response.ok) {
-        const data = await response.json().catch(() => null)
-        setSwitchError(data?.detail ?? "Could not switch roles. Please try again.")
-        return
-      }
-      refresh()
-    } catch {
-      setSwitchError("Could not reach the server. Please check your connection.")
-    } finally {
-      setSwitchingRole(null)
-    }
   }
 
   const fields: { label: string; value: string }[] = [
@@ -75,37 +44,6 @@ export function DashboardPage() {
         </p>
 
         <dl className="divide-y divide-border">
-          <div className="py-3">
-            <div className="flex items-center justify-between">
-              <dt className="text-sm text-muted-foreground">Role</dt>
-              <dd className="text-sm font-medium text-foreground">{formatRoles(user.roles)}</dd>
-            </div>
-
-            {missingRoles.length > 0 && (
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                {missingRoles.map((role) => (
-                  <button
-                    key={role}
-                    type="button"
-                    disabled={!isVerified || switchingRole === role}
-                    onClick={() => handleAddRole(role)}
-                    className="rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    {switchingRole === role ? "Adding..." : `Also become a ${capitalize(role)}`}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {!isVerified && missingRoles.length > 0 && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                Complete KYC verification to switch or add roles.
-              </p>
-            )}
-
-            {switchError && <p className="mt-2 text-xs text-destructive">{switchError}</p>}
-          </div>
-
           {fields.map((field) => (
             <div key={field.label} className="flex items-center justify-between py-3">
               <dt className="text-sm text-muted-foreground">{field.label}</dt>

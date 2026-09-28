@@ -13,13 +13,11 @@ import { useAuth } from "@/contexts/AuthContext"
 
 type TopbarUser = {
   name: string
-  role: string
   initials: string
 }
 
 const DEFAULT_USER: TopbarUser = {
   name: "Eze N.",
-  role: "Admin",
   initials: "EN",
 }
 
@@ -73,7 +71,6 @@ export function Topbar({
             <DropdownMenuGroup>
               <DropdownMenuLabel>
                 <p className="text-sm font-medium">{user.name}</p>
-                <p className="text-xs font-normal text-muted-foreground">{user.role}</p>
               </DropdownMenuLabel>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />

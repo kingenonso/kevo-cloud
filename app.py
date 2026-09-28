@@ -906,6 +906,27 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     return user
 
 
+def require_verified_user(current_user: UserModel = Depends(get_current_user)) -> UserModel:
+    """
+    Gate for actions that move money or create real financial/securities
+    exposure (deposits, withdrawals, bank account linking, creating
+    listings, buyer interest, transactions, ROFR requests, and similar).
+    Admins are exempt - they are KEVO staff administering the platform,
+    not retail investors being verified, and several of these endpoints
+    are deliberately callable by either the party themselves or an admin
+    on their behalf. An unverified non-admin account can still browse,
+    view its own profile, and start KYC (2026-09-28, confirmed with Eze;
+    admin exemption added after finding /rofr-requests allows either the
+    seller or an admin to submit it).
+    """
+    if current_user.account_type != "admin" and current_user.kyc_status != "verified":
+        raise HTTPException(
+            status_code=403,
+            detail="Complete KYC verification before performing this action"
+        )
+    return current_user
+
+
 @app.post("/login")
 @limiter.limit("5/minute")
 def login(request: Request, credentials: LoginRequest, db: Session = Depends(get_db)):
@@ -1478,37 +1499,6 @@ def get_my_profile(
     }
 
 
-class SwitchRoleRequest(BaseModel):
-    role: str
-
-
-@app.post("/me/roles/switch")
-def switch_role(
-    payload: SwitchRoleRequest,
-    db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
-):
-    if payload.role not in ["buyer", "seller"]:
-        raise HTTPException(status_code=400, detail="Role must be buyer or seller")
-
-    if current_user.kyc_status != "verified":
-        raise HTTPException(
-            status_code=403,
-            detail="Complete KYC verification before switching roles"
-        )
-
-    if payload.role not in current_user.roles:
-        current_user.roles = current_user.roles + [payload.role]
-        log_audit_event(
-            db, current_user.id, "role_added", target_type="user",
-            target_id=current_user.id, detail=f"added role: {payload.role}"
-        )
-        db.commit()
-        db.refresh(current_user)
-
-    return {"roles": current_user.roles}
-
-
 class WalletDepositRequest(BaseModel):
     amount: float
     currency: str = "USD"
@@ -1560,7 +1550,7 @@ def get_my_funds(
 def deposit_to_my_wallet(
     request: WalletDepositRequest,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     log_audit_event(db, current_user.id, "wallet_deposit_initiated", target_type="wallet", target_id=current_user.id,
                      detail=f"amount={request.amount} currency={request.currency}")
@@ -1586,7 +1576,7 @@ def deposit_to_my_wallet(
 def withdraw_from_my_wallet(
     request: WalletWithdrawRequest,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     log_audit_event(db, current_user.id, "wallet_withdrawal_requested", target_type="wallet", target_id=current_user.id,
                      detail=f"amount={request.amount} currency={request.currency}")
@@ -1659,7 +1649,7 @@ This link expires in 15 minutes and can only be used once. If you didn't request
 def confirm_my_withdrawal(
     request: ConfirmWithdrawalRequest,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     token_hash = hashlib.sha256(request.token.encode()).hexdigest()
     confirmation = db.query(WithdrawalConfirmation).filter(WithdrawalConfirmation.token_hash == token_hash).first()
@@ -1705,7 +1695,7 @@ def confirm_my_withdrawal(
 def add_my_bank_account(
     request: BankAccountRequest,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     log_audit_event(db, current_user.id, "bank_account_add_initiated", target_type="wallet", target_id=current_user.id,
                      detail=f"bank_name={request.bank_name}")
@@ -1737,7 +1727,7 @@ def list_my_bank_accounts(
 def verify_my_bank_account(
     bank_account_id: int,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     try:
         result = wallet_client.verify_bank_account(current_user.id, bank_account_id)
@@ -1768,7 +1758,7 @@ def disable_my_bank_account(
 @app.post("/me/bank-accounts/connect-session")
 def start_bank_connection(
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     log_audit_event(db, current_user.id, "bank_account_connect_initiated", target_type="wallet", target_id=current_user.id)
     try:
@@ -1784,7 +1774,7 @@ def start_bank_connection(
 def finalize_bank_connection(
     request: ConnectFinalizeRequest,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     try:
         result = wallet_client.finalize_bank_connection(current_user.id, request.session_id, current_user.name)
@@ -1801,7 +1791,7 @@ def finalize_bank_connection(
 @app.post("/me/connect/account")
 def create_my_connect_account(
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     # TODO: country is hardcoded to "US" as a placeholder to prove the
     # mechanism works in Stripe test mode. Mapping a real user's actual
@@ -1819,7 +1809,7 @@ def create_my_connect_account(
 
 @app.post("/me/connect/onboarding-link")
 def create_my_connect_onboarding_link(
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     return_url = "http://localhost:5173/app/wallet"
     try:
@@ -1929,6 +1919,12 @@ def update_kyc_status(
 
     old_status = user.kyc_status
     user.kyc_status = status
+    # Roles are fully derived from KYC status, not chosen separately - a
+    # verified user gets full access to both buyer and seller activity;
+    # rejecting/unverifying removes both (2026-09-28, confirmed with Eze:
+    # the real buyer/seller distinction has always lived per-transaction,
+    # not on the account, so a separate role choice added no protection).
+    user.roles = ["seller", "buyer"] if status == "verified" else []
 
     log_audit_event(db, current_user.id, "kyc_status_changed", target_type="user", target_id=user.id, detail=f"{old_status} -> {status}")
     db.commit()
@@ -1948,7 +1944,7 @@ def update_kyc_status(
 def create_ownership(
     ownership: OwnershipCreate,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     if current_user.id != ownership.seller_id:
         raise HTTPException(
@@ -1987,7 +1983,7 @@ def create_ownership(
 def create_transaction(
     transaction: TransactionCreate,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     # INVARIANT (2026-09-09): agreed_price MUST remain a value the caller
     # supplies, reflecting terms two humans already agreed to off-platform.
@@ -2300,7 +2296,7 @@ def get_ownership_records(
 def create_listing(
     listing: ListingCreate,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     if current_user.id != listing.seller_id:
         raise HTTPException(
@@ -2685,7 +2681,7 @@ def update_transaction_status(
 def create_buyer_interest(
     interest: BuyerInterestCreate,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     if current_user.id != interest.buyer_id:
         raise HTTPException(
@@ -5683,7 +5679,7 @@ class RofrRequestCreate(BaseModel):
 def create_rofr_request(
     payload: RofrRequestCreate,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     transaction = db.query(Transaction).filter(Transaction.id == payload.transaction_id).first()
     if transaction is None:
@@ -6193,7 +6189,7 @@ def create_loan_request(
     requested_amount: float,
     notes: str | None = None,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     ownership_record = db.query(OwnershipRecord).filter(OwnershipRecord.id == ownership_record_id).first()
     if ownership_record is None:
@@ -6344,7 +6340,7 @@ def create_option_funding_referral(
     company: str,
     notes: str | None = None,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     referral = OptionFundingReferral(
         holder_id=current_user.id,
@@ -7008,7 +7004,7 @@ def create_tender_offer_election(
     ownership_record_id: int,
     shares_offered: int,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     program = db.query(TenderOfferProgram).filter(TenderOfferProgram.id == program_id).first()
     if program is None:
@@ -7198,7 +7194,7 @@ def _require_seller_financing_party_or_admin(agreement, current_user, db):
 def create_seller_financing_agreement(
     payload: SellerFinancingAgreementCreate,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     transaction = db.query(Transaction).filter(Transaction.id == payload.transaction_id).first()
     if transaction is None:
@@ -7267,7 +7263,7 @@ def confirm_seller_financing_payment(
     paid_amount: float | None = None,
     notes: str | None = None,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     agreement = _get_seller_financing_agreement_or_404(agreement_id, db)
     transaction = db.query(Transaction).filter(Transaction.id == agreement.transaction_id).first()
@@ -7517,7 +7513,7 @@ def create_seller_financing_reserve(
     agreement_id: int,
     payload: SellerFinancingReserveCreate,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     agreement = _get_seller_financing_agreement_or_404(agreement_id, db)
     transaction = _require_seller_financing_party_or_admin(agreement, current_user, db)
@@ -7633,7 +7629,7 @@ def create_seller_financing_collateral(
     agreement_id: int,
     payload: SellerFinancingCollateralCreate,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     agreement = _get_seller_financing_agreement_or_404(agreement_id, db)
     transaction = _require_seller_financing_party_or_admin(agreement, current_user, db)
@@ -8001,7 +7997,7 @@ def create_auction_bid(
     listing_id: int,
     payload: AuctionBidCreate,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     listing = db.query(ListingModel).filter(ListingModel.id == listing_id).first()
     if listing is None:
@@ -8057,7 +8053,7 @@ def get_auction_bids(
 def accept_auction_bid(
     bid_id: int,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     bid = db.query(SecondaryAuctionBid).filter(SecondaryAuctionBid.id == bid_id).first()
     if bid is None:
@@ -8603,7 +8599,7 @@ def _serialize_commitment(c: LiquidityCommitment):
 def create_liquidity_commitment(
     payload: LiquidityCommitmentCreate,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_verified_user)
 ):
     """
     M31 gap-closure item, 2026-09-25 - Liquidity Commitment, the fourth of
