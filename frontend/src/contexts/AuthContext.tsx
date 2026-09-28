@@ -5,7 +5,7 @@ export type CurrentUser = {
   id: number
   name: string
   email: string
-  role: string
+  roles: string[]
   kyc_status: string | null
   jurisdiction: string
   account_type: string

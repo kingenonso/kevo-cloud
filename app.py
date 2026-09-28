@@ -1413,6 +1413,12 @@ def create_user(
         email=user.email,
         hashed_password=hash_password(user.password),
         role=user.role,
+        # Roles start empty and are only granted post-KYC-verification via
+        # POST /me/roles/switch - an unverified account has no role at all
+        # (2026-09-28, matches the platform's "compliance gates nothing
+        # except messaging" posture: this is now the second deliberate
+        # exception, confirmed with Eze).
+        roles=[],
         seller_affiliate_status=user.seller_affiliate_status,
         jurisdiction=user.jurisdiction,
         phone_number=user.phone_number,
@@ -1431,7 +1437,7 @@ def create_user(
             "id": new_user.id,
             "name": new_user.name,
             "email": new_user.email,
-            "role": new_user.role,
+            "roles": new_user.roles,
             "seller_affiliate_status": new_user.seller_affiliate_status,
             "jurisdiction": new_user.jurisdiction,
             "phone_number": new_user.phone_number,
@@ -1451,7 +1457,7 @@ def get_users(
     return [
         {
             "id": user.id,
-            "role": user.role
+            "roles": user.roles
         }
         for user in users
     ]
@@ -1465,11 +1471,42 @@ def get_my_profile(
         "id": current_user.id,
         "name": current_user.name,
         "email": current_user.email,
-        "role": current_user.role,
+        "roles": current_user.roles,
         "kyc_status": current_user.kyc_status,
         "jurisdiction": current_user.jurisdiction,
         "account_type": current_user.account_type
     }
+
+
+class SwitchRoleRequest(BaseModel):
+    role: str
+
+
+@app.post("/me/roles/switch")
+def switch_role(
+    payload: SwitchRoleRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if payload.role not in ["buyer", "seller"]:
+        raise HTTPException(status_code=400, detail="Role must be buyer or seller")
+
+    if current_user.kyc_status != "verified":
+        raise HTTPException(
+            status_code=403,
+            detail="Complete KYC verification before switching roles"
+        )
+
+    if payload.role not in current_user.roles:
+        current_user.roles = current_user.roles + [payload.role]
+        log_audit_event(
+            db, current_user.id, "role_added", target_type="user",
+            target_id=current_user.id, detail=f"added role: {payload.role}"
+        )
+        db.commit()
+        db.refresh(current_user)
+
+    return {"roles": current_user.roles}
 
 
 class WalletDepositRequest(BaseModel):
@@ -1901,7 +1938,7 @@ def update_kyc_status(
         "message": "KYC status updated",
         "user": {
             "id": user.id,
-            "role": user.role,
+            "roles": user.roles,
             "kyc_status": user.kyc_status
         }
     }
@@ -2406,7 +2443,7 @@ def get_listing(
         },
         "seller": {
             "id": seller.id,
-            "role": seller.role
+            "roles": seller.roles
         }
     }
 @app.put("/listings/{listing_id}")
@@ -5593,8 +5630,8 @@ def get_deal_room(
             "settlement_currency": transaction.settlement_currency
         },
         "participants": {
-            "buyer": {"id": buyer.id, "role": buyer.role},
-            "seller": {"id": seller.id, "role": seller.role}
+            "buyer": {"id": buyer.id, "roles": buyer.roles},
+            "seller": {"id": seller.id, "roles": seller.roles}
         },
         "compliance": {
             "status": compliance_result["status"],
