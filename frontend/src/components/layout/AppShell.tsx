@@ -2,7 +2,7 @@ import type { ReactNode } from "react"
 import { Sidebar } from "./Sidebar"
 import { Topbar } from "./Topbar"
 import { useAuth } from "@/contexts/AuthContext"
-import { getInitials, formatRoles } from "@/lib/format"
+import { getInitials } from "@/lib/format"
 
 export function AppShell({
   title,
@@ -16,7 +16,6 @@ export function AppShell({
   const displayUser = user
     ? {
         name: user.name,
-        role: formatRoles(user.roles),
         initials: getInitials(user.name),
       }
     : undefined

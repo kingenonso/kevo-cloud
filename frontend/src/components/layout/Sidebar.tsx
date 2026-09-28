@@ -11,13 +11,11 @@ import {
 
 type SidebarUser = {
   name: string
-  role: string
   initials: string
 }
 
 const DEFAULT_USER: SidebarUser = {
   name: "Eze N.",
-  role: "Admin",
   initials: "EN",
 }
 
@@ -133,9 +131,6 @@ export function Sidebar({ user = DEFAULT_USER }: { user?: SidebarUser }) {
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-sidebar-foreground">
             {user.name}
-          </p>
-          <p className="truncate text-xs text-sidebar-foreground/50">
-            {user.role}
           </p>
         </div>
       </div>
