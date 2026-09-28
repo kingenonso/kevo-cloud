@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>KEVO — Bank Link Test (throwaway)</title>
+<script src="https://js.stripe.com/v3/"></script>
+<style>
+  body { font-family: monospace; background: #0b0f1a; color: #e8eaf0; padding: 40px; max-width: 640px; margin: 0 auto; }
+  input, button { display: block; margin: 8px 0; padding: 10px; width: 100%; box-sizing: border-box; }
+  button { background: #3b5bdb; color: white; border: none; cursor: pointer; }
+  button:disabled { background: #444; }
+  pre { background: #161b26; padding: 12px; white-space: pre-wrap; word-break: break-all; }
+  h2 { border-top: 1px solid #333; padding-top: 20px; margin-top: 30px; }
+</style>
+</head>
+<body>
+<h1>KEVO Bank Link Test (throwaway page)</h1>
+
+<h2>1. Log in</h2>
+<input id="email" placeholder="email">
+<input id="password" type="password" placeholder="password">
+<button onclick="login()">Log in</button>
+<pre id="loginOut"></pre>
+
+<h2>2. Connect a real bank account via Stripe</h2>
+<button id="connectBtn" onclick="startConnection()" disabled>Connect bank account</button>
+<pre id="connectOut"></pre>
+
+<script>
+const STRIPE_PUBLISHABLE_KEY = "pk_test_51UKfIXCBLxvSdcQS9xMqzN0XlyljDbXsCWrGRQU7jOmFhOe2PGLoRSqfKT9UzUpISQbTzI8AHsoF7xjGUBxiat1f00NCj8Q6uC";
+
+let token = null;
+const stripe = Stripe(STRIPE_PUBLISHABLE_KEY);
+
+async function login() {
+  const email = document.getElementById('email').value;
+  const password = document.getElementById('password').value;
+  const res = await fetch('/login', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({email, password})
+  });
+  const data = await res.json();
+  document.getElementById('loginOut').textContent = res.status + ': ' + JSON.stringify(data, null, 2);
+  if (res.ok) {
+    token = data.access_token;
+    document.getElementById('connectBtn').disabled = false;
+  }
+}
+
+async function startConnection() {
+  const out = document.getElementById('connectOut');
+  out.textContent = 'Starting session...';
+  const res = await fetch('/me/bank-accounts/connect-session', {
+    method: 'POST',
+    headers: {'Authorization': 'Bearer ' + token}
+  });
+  const data = await res.json();
+  if (!res.ok) { out.textContent = 'Error starting session: ' + JSON.stringify(data); return; }
+
+  out.textContent = 'Opening Stripe bank-login window...';
+  const {financialConnectionsSession, error} = await stripe.collectFinancialConnectionsAccounts({
+    clientSecret: data.clientSecret
+  });
+  if (error) { out.textContent = 'Stripe error: ' + JSON.stringify(error); return; }
+
+  out.textContent = 'Bank login complete, finalizing on our server...';
+  const finRes = await fetch('/me/bank-accounts/connect-finalize', {
+    method: 'POST',
+    headers: {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
+    body: JSON.stringify({session_id: financialConnectionsSession.id})
+  });
+  const finData = await finRes.json();
+  out.textContent = finRes.status + ': ' + JSON.stringify(finData, null, 2);
+}
+</script>
+</body>
+</html>
