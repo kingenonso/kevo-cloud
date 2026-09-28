@@ -4,7 +4,6 @@ import statistics
 from collections import defaultdict
 from fastapi import FastAPI, Depends, HTTPException, Request, File, UploadFile
 from fastapi.security import OAuth2PasswordBearer
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -37,11 +36,6 @@ import wallet_client
 import email_client
 from apscheduler.schedulers.background import BackgroundScheduler
 app = FastAPI(title="KEVO API")
-
-# M28 (first slice) - serves the web app's login + dashboard shell as static
-# files, same-origin, so no CORS setup is needed. html=True lets
-# /app/ resolve to static/index.html automatically.
-app.mount("/app", StaticFiles(directory="static", html=True), name="frontend")
 
 # M27 (first slice) - Hash-Chained Compliance Decision Ledger helpers.
 # GENESIS_HASH is the fixed starting point of the one global chain -
