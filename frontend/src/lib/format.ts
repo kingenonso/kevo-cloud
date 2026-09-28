@@ -10,6 +10,11 @@ export function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1)
 }
 
+export function formatRoles(roles: string[] | undefined): string {
+  if (!roles || roles.length === 0) return "-"
+  return roles.map(capitalize).join(" & ")
+}
+
 export function formatMoney(amount: number, currency: string = "USD"): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",

@@ -98,7 +98,7 @@ export function Sidebar({ user = DEFAULT_USER }: { user?: SidebarUser }) {
   return (
     <aside className="flex h-screen w-64 shrink-0 flex-col bg-sidebar px-4 py-6 text-sidebar-foreground">
       <div className="px-2 pb-8">
-        <span className="font-heading text-2xl font-semibold tracking-tight">
+        <span className="font-heading text-2xl font-semibold tracking-[-0.01em]">
           KEVO
         </span>
         <p className="mt-0.5 text-[11px] font-medium uppercase tracking-[0.14em] text-sidebar-foreground/40">

@@ -257,36 +257,41 @@ export function WalletPage() {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="rounded-3xl border border-border bg-card p-8 shadow-sm lg:col-span-2">
+        <div className="relative overflow-hidden rounded-3xl border border-border bg-card p-8 shadow-sm lg:col-span-2">
+          <div
+            className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full opacity-25"
+            style={{ background: "radial-gradient(circle, var(--accent) 0%, transparent 70%)" }}
+          />
+          <div className="relative">
           <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
             Total Balance
           </p>
-          <p className="mt-3 font-heading text-4xl font-semibold text-foreground">
+          <p className="mt-3 font-heading text-4xl font-semibold tabular-nums text-foreground">
             {walletLoading ? "..." : wallet ? formatMoney(wallet.total, currency) : "-"}
           </p>
 
           <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
             <div>
               <p className="text-xs text-muted-foreground">Available</p>
-              <p className="mt-1 text-sm font-medium text-foreground">
+              <p className="mt-1 text-sm font-medium tabular-nums text-foreground">
                 {wallet ? formatMoney(wallet.available, currency) : "-"}
               </p>
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Pending</p>
-              <p className="mt-1 text-sm font-medium text-foreground">
+              <p className="mt-1 text-sm font-medium tabular-nums text-foreground">
                 {wallet ? formatMoney(wallet.pending, currency) : "-"}
               </p>
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Locked</p>
-              <p className="mt-1 text-sm font-medium text-foreground">
+              <p className="mt-1 text-sm font-medium tabular-nums text-foreground">
                 {wallet ? formatMoney(wallet.locked, currency) : "-"}
               </p>
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Withdrawal Pending</p>
-              <p className="mt-1 text-sm font-medium text-foreground">
+              <p className="mt-1 text-sm font-medium tabular-nums text-foreground">
                 {wallet ? formatMoney(wallet.withdrawalPending, currency) : "-"}
               </p>
             </div>
@@ -299,6 +304,7 @@ export function WalletPage() {
             <Button variant="outline" onClick={() => setWithdrawOpen(true)}>
               Withdraw
             </Button>
+          </div>
           </div>
         </div>
 

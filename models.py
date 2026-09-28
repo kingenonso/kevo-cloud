@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, Boolean, Date, DateTime
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import declarative_base, relationship
 
 
@@ -12,6 +13,7 @@ class User(Base):
     name = Column(String(255), nullable=False)
     email = Column(String(255), unique=True, nullable=False)
     role = Column(String(50), nullable=False, default="seller")
+    roles = Column(ARRAY(String(50)), nullable=False, default=lambda: ["seller"])
     kyc_status = Column(String(50), nullable=False, default="not_started")
     jurisdiction = Column(String(100), nullable=True)
     seller_affiliate_status = Column(String(50), nullable=True)

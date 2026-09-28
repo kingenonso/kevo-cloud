@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -65,14 +66,16 @@ export function Topbar({
         </button>
 
         <DropdownMenu>
-          <DropdownMenuTrigger className="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground">
+          <DropdownMenuTrigger className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-b from-[#E8CA6E] to-[#C9A227] text-sm font-semibold text-primary-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.25)]">
             {user.initials}
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuLabel>
-              <p className="text-sm font-medium">{user.name}</p>
-              <p className="text-xs font-normal text-muted-foreground">{user.role}</p>
-            </DropdownMenuLabel>
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>
+                <p className="text-sm font-medium">{user.name}</p>
+                <p className="text-xs font-normal text-muted-foreground">{user.role}</p>
+              </DropdownMenuLabel>
+            </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuItem>Profile</DropdownMenuItem>
             <DropdownMenuItem onClick={() => navigate("/settings")}>Settings</DropdownMenuItem>
