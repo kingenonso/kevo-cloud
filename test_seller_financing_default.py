@@ -63,12 +63,13 @@ def auth_headers(user):
     return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
-def make_user(db, suffix="1", role="buyer", account_type="participant"):
+def make_user(db, suffix="1", role="buyer", account_type="participant", kyc_status="verified"):
     user = UserModel(
         name=f"User {suffix}",
         email=f"sfduser{suffix}-{id(object())}@example.com",
         role=role,
         account_type=account_type,
+        kyc_status=kyc_status,
         hashed_password=hash_password("testpass123"),
     )
     db.add(user)

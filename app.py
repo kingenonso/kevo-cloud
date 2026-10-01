@@ -1089,12 +1089,31 @@ def get_audit_log(
     ]
 
 
-@app.post("/users/{user_id}/set-password")
-def set_password(
+@app.post("/users/{user_id}/request-password-setup")
+def request_password_setup(
     user_id: int,
-    request: SetPasswordRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
 ):
+    """
+    Full-gap-closure pass (Batch B, item 16), 2026-10-01 - closes the real
+    identity-verification gap flagged since M18 (2026-09-12): the old
+    POST /users/{user_id}/set-password could be called by anyone who merely
+    knew a user's numeric id, with zero proof they were that person. Now
+    that real email infrastructure exists (email_client.py, built for the
+    forgot-password flow), this reuses that exact same proven mechanism -
+    PasswordResetToken plus a one-time emailed link - rather than inventing
+    a second one. Admin-only to trigger: this is for provisioning a legacy
+    or newly-imported account that has no password yet (e.g. a bulk-added
+    historical shareholder) - the user themselves can't call this, since by
+    definition they have no way to log in yet. The actual password-set step
+    reuses the existing, already-tested POST /reset-password endpoint
+    unchanged - it only ever checks token validity, never whether a
+    password already existed, so no new consuming endpoint was needed.
+    """
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can initiate password setup for another account")
+
     user = db.query(UserModel).filter(UserModel.id == user_id).first()
 
     if user is None:
@@ -1103,13 +1122,33 @@ def set_password(
     if user.hashed_password is not None:
         raise HTTPException(
             status_code=400,
-            detail="Password already set for this user"
+            detail="This account already has a password - use the forgot-password flow instead"
         )
 
-    user.hashed_password = hash_password(request.password)
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    now = datetime.utcnow()
+
+    setup_token = PasswordResetToken(
+        user_id=user.id,
+        token_hash=token_hash,
+        created_at=now,
+        expires_at=now + timedelta(minutes=30),
+        used_at=None
+    )
+    db.add(setup_token)
     db.commit()
 
-    return {"message": "Password set successfully"}
+    setup_link = f"https://kevo.example/reset-password?token={raw_token}"
+    email_client.send_email(
+        user.email,
+        "Set up your KEVO account password",
+        f"""An administrator has set up your KEVO account. Click here to set your password: {setup_link}
+
+This link expires in 30 minutes and can only be used once."""
+    )
+
+    return {"message": "Password setup link sent"}
 
 
 @app.put("/change-password")

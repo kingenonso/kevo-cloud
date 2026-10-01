@@ -99,7 +99,7 @@ def mock_escrow_client():
         }
 
 
-def make_user(db, suffix="1", role="buyer", account_type="participant", kyc_status="not_started"):
+def make_user(db, suffix="1", role="buyer", account_type="participant", kyc_status="verified"):
     user = UserModel(
         name=f"User {suffix}",
         email=f"sfuser{suffix}-{id(object())}@example.com",
