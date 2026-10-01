@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, Boolean, Date, DateTime
+from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, Boolean, Date, DateTime, JSON
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -13,7 +13,15 @@ class User(Base):
     name = Column(String(255), nullable=False)
     email = Column(String(255), unique=True, nullable=False)
     role = Column(String(50), nullable=False, default="seller")
-    roles = Column(ARRAY(String(50)), nullable=False, default=lambda: ["seller"])
+    # Real Postgres ARRAY in production; falls back to JSON under SQLite, which
+    # has no native array type - this is what the in-memory pytest fixtures
+    # across the whole suite use, and ARRAY alone made every one of them fail
+    # to even create the users table (found 2026-10-01, while writing new
+    # tests - a real regression introduced when `roles` was added, not caught
+    # earlier because the full test suite hadn't been re-run since). JSON
+    # stores/reads the same Python list correctly; it just can't do Postgres
+    # array-specific operators, which nothing in this codebase uses on `roles`.
+    roles = Column(ARRAY(String(50)).with_variant(JSON(), "sqlite"), nullable=False, default=lambda: ["seller"])
     kyc_status = Column(String(50), nullable=False, default="not_started")
     jurisdiction = Column(String(100), nullable=True)
     seller_affiliate_status = Column(String(50), nullable=True)
