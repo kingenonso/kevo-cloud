@@ -83,7 +83,7 @@ def test_me_returns_own_profile(client, db_session):
     body = resp.json()
     assert body["id"] == user.id
     assert body["name"] == "User 1"
-    assert body["role"] == "seller"
+    assert body["roles"] == ["seller"]
     assert body["kyc_status"] == "verified"
     assert body["jurisdiction"] == "US"
     assert body["account_type"] == "participant"

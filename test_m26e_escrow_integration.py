@@ -85,12 +85,13 @@ def auth_headers(user):
     return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
-def make_user(db, suffix="1", role="buyer", account_type="participant"):
+def make_user(db, suffix="1", role="buyer", account_type="participant", kyc_status="verified"):
     user = UserModel(
         name=f"User {suffix}",
         email=f"m26euser{suffix}-{id(object())}@example.com",
         role=role,
         account_type=account_type,
+        kyc_status=kyc_status,
         hashed_password=hash_password("testpass123"),
     )
     db.add(user)
@@ -337,7 +338,8 @@ def test_webhook_flips_funds_released_on_disbursed(client, db_session, mock_escr
         "items": [{"schedule": [{"status": {"payment_received": True, "disbursed_to_beneficiary": True}}]}]
     }
 
-    resp = client.post("/webhooks/escrow", json={"event": "payment_disbursed", "transaction_id": 555})
+    with patch("wallet_client.capture_lock", return_value={"status": "COMPLETED"}):
+        resp = client.post("/webhooks/escrow", json={"event": "payment_disbursed", "transaction_id": 555})
     assert resp.status_code == 200
     db_session.refresh(record)
     db_session.refresh(txn)

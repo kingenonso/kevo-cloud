@@ -27,6 +27,7 @@ from sqlalchemy.pool import StaticPool
 
 from models import Base, User as UserModel, Listing as ListingModel, Transaction
 from app import app, get_db, hash_password, create_access_token
+from unittest.mock import patch
 
 
 @pytest.fixture()
@@ -69,16 +70,16 @@ def client(db_session):
     return TestClient(app, headers={"Authorization": f"Bearer {token}"})
 
 
-def make_seller(db, suffix="1"):
-    seller = UserModel(name="Seller", email=f"seller{suffix}@example.com", role="seller")
+def make_seller(db, suffix="1", kyc_status="verified"):
+    seller = UserModel(name="Seller", email=f"seller{suffix}@example.com", role="seller", kyc_status=kyc_status)
     db.add(seller)
     db.commit()
     db.refresh(seller)
     return seller
 
 
-def make_buyer(db, suffix="1"):
-    buyer = UserModel(name="Buyer", email=f"buyer{suffix}@example.com", role="buyer")
+def make_buyer(db, suffix="1", kyc_status="verified"):
+    buyer = UserModel(name="Buyer", email=f"buyer{suffix}@example.com", role="buyer", kyc_status=kyc_status)
     db.add(buyer)
     db.commit()
     db.refresh(buyer)
@@ -190,7 +191,8 @@ def test_get_transaction_by_id_reflects_status_after_patch(client, db_session):
     listing = make_listing(db_session, seller)
     txn = make_transaction(db_session, listing, buyer, 100, status="interested")
 
-    patch_resp = client.patch(f"/transactions/{txn.id}/status", params={"status": "accepted"})
+    with patch("wallet_client.lock_funds", return_value={"status": "ACTIVE"}):
+        patch_resp = client.patch(f"/transactions/{txn.id}/status", params={"status": "accepted"})
     assert patch_resp.status_code == 200
 
     resp = client.get(f"/transactions/{txn.id}")

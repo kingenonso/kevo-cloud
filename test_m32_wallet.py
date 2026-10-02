@@ -79,6 +79,7 @@ def make_user(db, suffix="1"):
         email=f"wallet{suffix}-{id(object())}@example.com",
         role="buyer",
         account_type="participant",
+        kyc_status="verified",
         hashed_password=hash_password("password123"),
     )
     db.add(user)

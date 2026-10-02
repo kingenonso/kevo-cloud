@@ -30,6 +30,7 @@ from sqlalchemy.pool import StaticPool
 
 from models import Base, User as UserModel, Listing as ListingModel, Transaction
 from app import app, get_db, hash_password, create_access_token
+from unittest.mock import patch
 
 
 @pytest.fixture()
@@ -75,16 +76,16 @@ def auth_headers(user):
     return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
-def make_seller(db, suffix="1"):
-    seller = UserModel(name="Seller", email=f"seller{suffix}@example.com", role="seller")
+def make_seller(db, suffix="1", kyc_status="verified"):
+    seller = UserModel(name="Seller", email=f"seller{suffix}@example.com", role="seller", kyc_status=kyc_status)
     db.add(seller)
     db.commit()
     db.refresh(seller)
     return seller
 
 
-def make_buyer(db, suffix="1"):
-    buyer = UserModel(name="Buyer", email=f"buyer{suffix}@example.com", role="buyer")
+def make_buyer(db, suffix="1", kyc_status="verified"):
+    buyer = UserModel(name="Buyer", email=f"buyer{suffix}@example.com", role="buyer", kyc_status=kyc_status)
     db.add(buyer)
     db.commit()
     db.refresh(buyer)
@@ -289,7 +290,8 @@ def test_accept_succeeds_when_within_available_quantity(client, db_session):
     listing = make_listing(db_session, seller, quantity=1000)
     txn = make_transaction(db_session, listing, buyer, 500, "interested")
 
-    resp = client.patch(f"/transactions/{txn.id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
+    with patch("wallet_client.lock_funds", return_value={"status": "ACTIVE"}):
+        resp = client.patch(f"/transactions/{txn.id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
     assert resp.status_code == 200
     assert resp.json()["transaction"]["status"] == "accepted"
 
@@ -320,11 +322,12 @@ def test_sequential_accepts_that_together_oversell_are_blocked(client, db_sessio
     txn1 = make_transaction(db_session, listing, buyer1, 600, "interested")
     txn2 = make_transaction(db_session, listing, buyer2, 600, "interested")
 
-    resp1 = client.patch(f"/transactions/{txn1.id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
-    assert resp1.status_code == 200
+    with patch("wallet_client.lock_funds", return_value={"status": "ACTIVE"}):
+        resp1 = client.patch(f"/transactions/{txn1.id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
+        assert resp1.status_code == 200
 
-    # 600 already accepted, only 400 left - accepting this second 600 must fail
-    resp2 = client.patch(f"/transactions/{txn2.id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
+        # 600 already accepted, only 400 left - accepting this second 600 must fail
+        resp2 = client.patch(f"/transactions/{txn2.id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
     assert resp2.status_code == 400
     assert "quantity" in resp2.json()["detail"].lower()
 
@@ -338,7 +341,8 @@ def test_accept_exactly_filling_remaining_quantity_succeeds(client, db_session):
     txn2 = make_transaction(db_session, listing, buyer2, 200, "interested")
 
     # exactly 200 left, accepting exactly 200 - should succeed (boundary)
-    resp = client.patch(f"/transactions/{txn2.id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
+    with patch("wallet_client.lock_funds", return_value={"status": "ACTIVE"}):
+        resp = client.patch(f"/transactions/{txn2.id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
     assert resp.status_code == 200
 
 
@@ -363,5 +367,6 @@ def test_accept_not_blocked_by_rejected_or_cancelled_transactions(client, db_ses
     make_transaction(db_session, listing, buyer1, 900, "rejected")
     txn2 = make_transaction(db_session, listing, buyer2, 900, "interested")
 
-    resp = client.patch(f"/transactions/{txn2.id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
+    with patch("wallet_client.lock_funds", return_value={"status": "ACTIVE"}):
+        resp = client.patch(f"/transactions/{txn2.id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
     assert resp.status_code == 200
