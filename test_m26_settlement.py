@@ -95,7 +95,7 @@ def auth_headers(user):
     return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
-def make_user(db, suffix="1", role="buyer", account_type="participant", kyc_status="not_started"):
+def make_user(db, suffix="1", role="buyer", account_type="participant", kyc_status="verified"):
     user = UserModel(
         name=f"User {suffix}",
         email=f"m26user{suffix}-{id(object())}@example.com",
@@ -460,7 +460,8 @@ def test_release_succeeds_when_both_confirmed(client, db_session):
     txn = make_transaction(db_session, listing, buyer, status="settlement_pending")
     record = make_settlement_record(db_session, txn, funds_received=True, shares_confirmed_transferable=True)
 
-    resp = client.put(f"/settlement-records/{record.id}/release-funds", headers=auth_headers(admin))
+    with patch("wallet_client.capture_lock", return_value={"status": "COMPLETED"}):
+        resp = client.put(f"/settlement-records/{record.id}/release-funds", headers=auth_headers(admin))
     assert resp.status_code == 200
     body = resp.json()
     assert body["funds_released"] is True

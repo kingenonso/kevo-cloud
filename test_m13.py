@@ -479,10 +479,18 @@ def test_find_matches_reaches_eligible_pending_review(client, db_session):
     assert matches[0]["compliance_status"] == "eligible_pending_review"
 
 
-def test_find_matches_blocked_when_kyc_not_verified(client, db_session):
+def test_create_buyer_interest_blocked_when_kyc_not_verified(client, db_session):
+    """
+    Full-gap-closure pass, 2026-10-01 - replaces the old
+    test_find_matches_blocked_when_kyc_not_verified. Buyer-interest creation
+    is now gated by require_verified_user (same rule as listings,
+    transactions, and ROFR requests), so an unverified buyer is blocked at
+    creation time rather than later at the matching stage - confirmed with
+    Eze 2026-10-01 that this is the intended behavior going forward.
+    """
     seller = make_seller(db_session)
     buyer = make_buyer(db_session, kyc_status="pending")
-    listing = make_listing(db_session, seller.id)
+    make_listing(db_session, seller.id)
 
     interest_response = client.post("/buyer-interests", json={
         "buyer_id": buyer.id,
@@ -491,11 +499,7 @@ def test_find_matches_blocked_when_kyc_not_verified(client, db_session):
         "desired_quantity": 500,
         "maximum_price": 100.0,
     }, headers=auth_headers(buyer))
-    interest_id = interest_response.json()["buyer_interest"]["id"]
-
-    response = client.get(f"/buyer-interests/{interest_id}/matches", headers=auth_headers(buyer))
-    matches = response.json()["matches"]
-    assert matches[0]["match_status"] == "blocked"
+    assert interest_response.status_code == 403
 
 
 # ---------------------------------------------------------------------------
