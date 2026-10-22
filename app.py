@@ -32,6 +32,7 @@ from models import SecondaryAuctionBid
 from models import ComplianceRuleChangeAlert
 from models import Message
 from models import LiquidityCommitment
+from models import SpeedDiscountOffer
 import escrow_client
 import wallet_client
 import email_client
@@ -2100,7 +2101,8 @@ def create_transaction(
         quantity=transaction.quantity,
         agreed_price=transaction.agreed_price,
         status="interested",
-        settlement_currency="USD"
+        settlement_currency="USD",
+        created_at=datetime.utcnow()
     )
 
     db.add(new_transaction)
@@ -2119,7 +2121,8 @@ def create_transaction(
             "quantity": new_transaction.quantity,
             "agreed_price": new_transaction.agreed_price,
             "status": new_transaction.status,
-            "settlement_currency": new_transaction.settlement_currency
+            "settlement_currency": new_transaction.settlement_currency,
+            "created_at": new_transaction.created_at
         }
     }
 
@@ -2142,7 +2145,8 @@ def get_transactions(db: Session = Depends(get_db), current_user: UserModel = De
             "quantity": t.quantity,
             "agreed_price": t.agreed_price,
             "status": t.status,
-            "settlement_currency": t.settlement_currency
+            "settlement_currency": t.settlement_currency,
+            "created_at": t.created_at
         }
         for t in transactions
     ]
@@ -2179,7 +2183,8 @@ def get_transaction(
             "quantity": transaction.quantity,
             "agreed_price": transaction.agreed_price,
             "status": transaction.status,
-            "settlement_currency": transaction.settlement_currency
+            "settlement_currency": transaction.settlement_currency,
+            "created_at": transaction.created_at
         }
     }      
 
@@ -2712,7 +2717,8 @@ def update_transaction_status(
             "quantity": transaction.quantity,
             "agreed_price": transaction.agreed_price,
             "status": transaction.status,
-            "settlement_currency": transaction.settlement_currency
+            "settlement_currency": transaction.settlement_currency,
+            "created_at": transaction.created_at
         }
     }    
 
@@ -5662,7 +5668,8 @@ def get_deal_room(
             "quantity": transaction.quantity,
             "agreed_price": transaction.agreed_price,
             "status": transaction.status,
-            "settlement_currency": transaction.settlement_currency
+            "settlement_currency": transaction.settlement_currency,
+            "created_at": transaction.created_at
         },
         "participants": {
             "buyer": {"id": buyer.id, "roles": buyer.roles},
@@ -8120,6 +8127,7 @@ def accept_auction_bid(
         quantity=bid.quantity,
         agreed_price=bid.bid_price,
         status="accepted",
+        created_at=datetime.utcnow(),
     )
     db.add(transaction)
     db.flush()
@@ -8765,3 +8773,242 @@ def withdraw_liquidity_commitment(
     db.refresh(commitment)
 
     return _serialize_commitment(commitment)
+
+
+# M15 gap-closure item, 2026-10-22 - Discount-for-Speed.
+#
+# Two independent pieces, both read-only/data-capture, neither one ever
+# computing or suggesting a price (the M10/M11 agreed_price invariant
+# enforced above in create_transaction applies here too):
+#
+#   1. SpeedDiscountOffer - a seller states, on their own listing, that
+#      they'd accept a lower price for a faster completed sale. Exactly
+#      like BuyerInterest.maximum_price or LiquidityCommitment's price
+#      range, this is pure data capture: nothing here matches, ranks, or
+#      auto-applies a discount to any transaction's agreed_price. A buyer
+#      who sees this offer and a seller still negotiate and state their
+#      own agreed_price at POST /transactions, same as before this
+#      feature existed.
+#
+#   2. GET /time-to-sale-stats - a platform-wide aggregate of how long a
+#      *real, completed* sale actually took, derived only from data KEVO
+#      already has (Transaction.created_at and the existing
+#      SettlementRecord.funds_released_at - no new completed_at column
+#      needed). Gated by a minimum sample size, same anonymization
+#      discipline as MIN_DISTINCT_BUYERS above, falling back to an honest
+#      "insufficient_data" response rather than publishing a statistic
+#      computed from a handful of transactions.
+
+MIN_TIME_TO_SALE_SAMPLES = 5
+
+
+class SpeedDiscountOfferCreate(BaseModel):
+    listing_id: int
+    seller_id: int
+    max_discount_percent: float | None = Field(default=None, gt=0, le=100)
+    floor_price: float | None = Field(default=None, gt=0)
+    speed_window_days: int = Field(gt=0)
+    notes: str | None = None
+
+
+def _serialize_speed_discount_offer(o: SpeedDiscountOffer):
+    return {
+        "id": o.id,
+        "listing_id": o.listing_id,
+        "seller_id": o.seller_id,
+        "max_discount_percent": o.max_discount_percent,
+        "floor_price": o.floor_price,
+        "speed_window_days": o.speed_window_days,
+        "notes": o.notes,
+        "status": o.status,
+        "created_at": o.created_at,
+        "disclaimer": (
+            "This is the seller's own stated willingness to accept a "
+            "lower price for a faster sale. It is not a binding offer, "
+            "not a price KEVO computed or suggested, and does not change "
+            "a listing's asking_price. The buyer and seller still agree "
+            "their own agreed_price when creating a transaction."
+        ),
+    }
+
+
+@app.post("/speed-discount-offers")
+def create_speed_discount_offer(
+    payload: SpeedDiscountOfferCreate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(require_verified_user)
+):
+    """
+    M15 gap-closure item, 2026-10-22. Self-submit only (caller must be the
+    listing's own seller, or admin) - same owner pattern as
+    create_liquidity_commitment / create_buyer_interest. The seller must
+    state at least one of max_discount_percent or floor_price - KEVO
+    never fills in either on their behalf.
+    """
+    listing = db.query(ListingModel).filter(ListingModel.id == payload.listing_id).first()
+    if listing is None:
+        raise HTTPException(status_code=404, detail="Listing not found")
+
+    if current_user.account_type != "admin" and current_user.id != payload.seller_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only create a speed discount offer for yourself"
+        )
+
+    if listing.seller_id != payload.seller_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only create a speed discount offer on your own listing"
+        )
+
+    if payload.max_discount_percent is None and payload.floor_price is None:
+        raise HTTPException(
+            status_code=400,
+            detail="You must state either max_discount_percent or floor_price"
+        )
+
+    if payload.floor_price is not None and payload.floor_price >= listing.asking_price:
+        raise HTTPException(
+            status_code=400,
+            detail="floor_price must be less than the listing's asking_price"
+        )
+
+    offer = SpeedDiscountOffer(
+        listing_id=payload.listing_id,
+        seller_id=payload.seller_id,
+        max_discount_percent=payload.max_discount_percent,
+        floor_price=payload.floor_price,
+        speed_window_days=payload.speed_window_days,
+        notes=payload.notes,
+        status="active",
+        created_at=datetime.utcnow(),
+    )
+    db.add(offer)
+    db.commit()
+    db.refresh(offer)
+
+    return _serialize_speed_discount_offer(offer)
+
+
+@app.get("/speed-discount-offers")
+def list_speed_discount_offers(
+    listing_id: int | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Any authenticated user can view active offers on a given listing -
+    the whole point of this feature is for a prospective buyer to see
+    that a seller has stated this willingness before reaching out. A
+    seller (or admin) listing without a listing_id filter sees their own
+    offers across all statuses instead.
+    """
+    query = db.query(SpeedDiscountOffer)
+
+    if listing_id is not None:
+        query = query.filter(
+            SpeedDiscountOffer.listing_id == listing_id,
+            SpeedDiscountOffer.status == "active"
+        )
+    elif current_user.account_type == "admin":
+        pass
+    else:
+        query = query.filter(SpeedDiscountOffer.seller_id == current_user.id)
+
+    return [_serialize_speed_discount_offer(o) for o in query.all()]
+
+
+@app.get("/speed-discount-offers/{offer_id}")
+def get_speed_discount_offer(
+    offer_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    offer = db.query(SpeedDiscountOffer).filter(SpeedDiscountOffer.id == offer_id).first()
+    if offer is None:
+        raise HTTPException(status_code=404, detail="Speed discount offer not found")
+
+    return _serialize_speed_discount_offer(offer)
+
+
+@app.put("/speed-discount-offers/{offer_id}/withdraw")
+def withdraw_speed_discount_offer(
+    offer_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(require_verified_user)
+):
+    offer = db.query(SpeedDiscountOffer).filter(SpeedDiscountOffer.id == offer_id).first()
+    if offer is None:
+        raise HTTPException(status_code=404, detail="Speed discount offer not found")
+
+    if current_user.account_type != "admin" and current_user.id != offer.seller_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only withdraw your own speed discount offer"
+        )
+
+    offer.status = "withdrawn"
+    db.commit()
+    db.refresh(offer)
+
+    return _serialize_speed_discount_offer(offer)
+
+
+@app.get("/time-to-sale-stats")
+def get_time_to_sale_stats(
+    company: str,
+    asset_type: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    M15 gap-closure item, 2026-10-22. Pure, read-only aggregation over
+    real completed transactions - never a KEVO-computed price, just how
+    long a real sale actually took. "Time to sale" is
+    SettlementRecord.funds_released_at minus Transaction.created_at, for
+    a transaction with status "completed" where both values are actually
+    known. A transaction created before this column existed has
+    created_at = NULL and is honestly excluded, rather than backfilled
+    with a fabricated timestamp (the project's "no fabricated
+    specificity" principle). Gated by MIN_TIME_TO_SALE_SAMPLES, same
+    anonymization/reliability discipline as MIN_DISTINCT_BUYERS above.
+    """
+    rows = db.query(Transaction, SettlementRecord).join(
+        ListingModel, Transaction.listing_id == ListingModel.id
+    ).join(
+        SettlementRecord, SettlementRecord.transaction_id == Transaction.id
+    ).filter(
+        ListingModel.company == company,
+        ListingModel.asset_type == asset_type,
+        Transaction.status == "completed",
+        Transaction.created_at.isnot(None),
+        SettlementRecord.funds_released_at.isnot(None),
+    ).all()
+
+    days_to_sale = [
+        (settlement.funds_released_at - transaction.created_at).total_seconds() / 86400.0
+        for transaction, settlement in rows
+        if settlement.funds_released_at >= transaction.created_at
+    ]
+
+    if len(days_to_sale) < MIN_TIME_TO_SALE_SAMPLES:
+        return {
+            "status": "insufficient_data",
+            "company": company,
+            "asset_type": asset_type,
+            "message": (
+                f"Fewer than {MIN_TIME_TO_SALE_SAMPLES} completed "
+                "transactions with a known creation time are available "
+                "for this company/asset type - insufficient data to "
+                "display a reliable time-to-sale statistic."
+            )
+        }
+
+    return {
+        "status": "ok",
+        "company": company,
+        "asset_type": asset_type,
+        "sample_size": len(days_to_sale),
+        "average_days_to_sale": round(statistics.mean(days_to_sale), 1),
+        "median_days_to_sale": round(statistics.median(days_to_sale), 1),
+    }

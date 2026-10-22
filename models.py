@@ -147,6 +147,19 @@ class Transaction(Base):
         default="USD"
     )
 
+    # M15 gap-closure item, 2026-10-22 - Discount-for-Speed. Nullable on
+    # purpose: historical rows created before this column existed have no
+    # honest value to backfill (no fabricated timestamps - the project's
+    # standing "no fabricated specificity" principle), so they stay NULL
+    # rather than getting an invented creation time. Every new transaction
+    # going forward is created with this set explicitly (see
+    # create_transaction / accept_auction_bid in app.py), the same pattern
+    # LiquidityCommitment.created_at already uses. Paired with
+    # SettlementRecord.funds_released_at (which already exists) to derive
+    # a real "time to sale" for a completed transaction, without adding a
+    # redundant completed_at column.
+    created_at = Column(DateTime, nullable=True)
+
 class BuyerInterest(Base):
     __tablename__ = "buyer_interests"
 
@@ -1077,5 +1090,43 @@ class LiquidityCommitment(Base):
     max_price = Column(Numeric(15, 2), nullable=True)
     expiration_date = Column(Date, nullable=True)
     conditions = Column(String(1000), nullable=True)
+    status = Column(String(50), nullable=False, default="active")
+    created_at = Column(DateTime, nullable=False)
+
+
+class SpeedDiscountOffer(Base):
+    """
+    M15 gap-closure item, 2026-10-22 - Discount-for-Speed.
+
+    A seller-stated (never KEVO-computed, never KEVO-suggested) offer to
+    accept a lower price in exchange for a faster completed sale. This
+    respects the same M10/M11 invariant create_transaction already
+    enforces in app.py: KEVO's own logic must never set, suggest, or
+    default agreed_price or any other trade term. This table only ever
+    stores numbers the seller themselves typed in - exactly like
+    BuyerInterest.maximum_price or LiquidityCommitment's price range
+    store buyer-stated numbers, never KEVO-derived ones. Nothing here
+    matches, ranks, recommends, or auto-applies a discount to any
+    transaction's agreed_price; a buyer who sees this offer and a seller
+    still negotiate and state their own agreed_price at
+    POST /transactions, exactly as before this feature existed.
+
+    A seller states at least one of max_discount_percent (e.g. "up to 5%
+    off my asking price") or floor_price (an explicit minimum dollar
+    amount they'd accept) - both optional so the seller can phrase it
+    either way, validated in app.py so at least one is actually set.
+    speed_window_days is the seller's own stated "if a sale completes
+    within this many days" window - also just stored, never enforced or
+    checked by any automatic process.
+    """
+    __tablename__ = "speed_discount_offers"
+
+    id = Column(Integer, primary_key=True)
+    listing_id = Column(Integer, ForeignKey("listings.id"), nullable=False)
+    seller_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    max_discount_percent = Column(Numeric(5, 2), nullable=True)
+    floor_price = Column(Numeric(15, 2), nullable=True)
+    speed_window_days = Column(Integer, nullable=False)
+    notes = Column(String(1000), nullable=True)
     status = Column(String(50), nullable=False, default="active")
     created_at = Column(DateTime, nullable=False)
