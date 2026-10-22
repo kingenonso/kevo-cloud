@@ -6128,7 +6128,16 @@ def release_settlement_funds(
     db.commit()
     db.refresh(settlement_record)
     if transaction is not None and transaction.status == "completed":
+        # _capture_wallet_funds_for_transaction does its own db.commit() on
+        # success, which (with SQLAlchemy's default expire_on_commit) wipes
+        # settlement_record's already-loaded attributes out from under us -
+        # without a second refresh here, the `return` below would hand back
+        # an object with nothing left in it, and the admin who clicked
+        # "release funds" would get an empty {} response even though the
+        # release itself succeeded. Found 2026-10-22 while re-enabling the
+        # tests that actually exercise this success path for the first time.
         _capture_wallet_funds_for_transaction(transaction, db)
+        db.refresh(settlement_record)
     return settlement_record
 
 

@@ -19,6 +19,7 @@ from models import (
     ComplianceDecisionLedger,
 )
 from app import app, get_db, hash_password, create_access_token, GENESIS_HASH
+from unittest.mock import patch
 
 
 @pytest.fixture()
@@ -112,7 +113,11 @@ def test_creating_transaction_logs_ledger_entry(client, db_session):
     assert entry.triggered_by == "transaction_created"
     assert entry.buyer_id == buyer.id
     assert entry.listing_id == listing.id
-    assert entry.decision_status in ("blocked", "review")
+    # needs_evidence is also a legitimate outcome here - this buyer has no
+    # jurisdiction on file, so assess_compliance falls through to that check
+    # once KYC (checked first) passes. This test only cares that creating a
+    # transaction logs an entry, not which specific status it logs.
+    assert entry.decision_status in ("blocked", "review", "needs_evidence")
 
 
 def test_first_entry_previous_hash_is_genesis(client, db_session):
@@ -125,10 +130,11 @@ def test_first_entry_previous_hash_is_genesis(client, db_session):
 
 def test_status_update_logs_new_ledger_entry(client, db_session):
     seller, buyer, listing, txn_id = create_real_transaction(client, db_session)
-    resp = client.patch(
-        f"/transactions/{txn_id}/status", params={"status": "accepted"},
-        headers=auth_headers(seller),
-    )
+    with patch("wallet_client.lock_funds", return_value={"status": "ACTIVE"}):
+        resp = client.patch(
+            f"/transactions/{txn_id}/status", params={"status": "accepted"},
+            headers=auth_headers(seller),
+        )
     assert resp.status_code == 200
     entries = db_session.query(ComplianceDecisionLedger).filter(
         ComplianceDecisionLedger.transaction_id == txn_id
@@ -139,7 +145,8 @@ def test_status_update_logs_new_ledger_entry(client, db_session):
 
 def test_second_entry_chains_to_first(client, db_session):
     seller, buyer, listing, txn_id = create_real_transaction(client, db_session)
-    client.patch(f"/transactions/{txn_id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
+    with patch("wallet_client.lock_funds", return_value={"status": "ACTIVE"}):
+        client.patch(f"/transactions/{txn_id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
     entries = db_session.query(ComplianceDecisionLedger).filter(
         ComplianceDecisionLedger.transaction_id == txn_id
     ).order_by(ComplianceDecisionLedger.id.asc()).all()
@@ -149,10 +156,11 @@ def test_second_entry_chains_to_first(client, db_session):
 
 def test_status_update_does_not_block_on_compliance(client, db_session):
     seller, buyer, listing, txn_id = create_real_transaction(client, db_session)
-    resp = client.patch(
-        f"/transactions/{txn_id}/status", params={"status": "accepted"},
-        headers=auth_headers(seller),
-    )
+    with patch("wallet_client.lock_funds", return_value={"status": "ACTIVE"}):
+        resp = client.patch(
+            f"/transactions/{txn_id}/status", params={"status": "accepted"},
+            headers=auth_headers(seller),
+        )
     assert resp.status_code == 200
     assert resp.json()["transaction"]["status"] == "accepted"
 
@@ -248,7 +256,8 @@ def test_verify_requires_auth_401(client, db_session):
 
 def test_verify_valid_on_clean_chain(client, db_session):
     seller, buyer, listing, txn_id = create_real_transaction(client, db_session)
-    client.patch(f"/transactions/{txn_id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
+    with patch("wallet_client.lock_funds", return_value={"status": "ACTIVE"}):
+        client.patch(f"/transactions/{txn_id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
     admin = make_user(db_session, "admin", account_type="admin")
     resp = client.get("/compliance-ledger/verify", headers=auth_headers(admin))
     assert resp.status_code == 200
@@ -284,7 +293,8 @@ def test_verify_detects_tampering(client, db_session):
 
 def test_verify_detects_broken_chain_link(client, db_session):
     seller, buyer, listing, txn_id = create_real_transaction(client, db_session)
-    client.patch(f"/transactions/{txn_id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
+    with patch("wallet_client.lock_funds", return_value={"status": "ACTIVE"}):
+        client.patch(f"/transactions/{txn_id}/status", params={"status": "accepted"}, headers=auth_headers(seller))
     admin = make_user(db_session, "admin", account_type="admin")
     entries = db_session.query(ComplianceDecisionLedger).order_by(ComplianceDecisionLedger.id.asc()).all()
     second_entry = entries[1]

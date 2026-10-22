@@ -34,6 +34,7 @@ from models import (
     BuyerInterest,
 )
 from app import app, get_db, hash_password, create_access_token
+from unittest.mock import patch
 
 
 @pytest.fixture()
@@ -499,9 +500,10 @@ def test_update_transaction_status_seller_can_accept(client, db_session):
     listing = make_listing(db_session, seller)
     txn = make_transaction(db_session, listing, buyer)
 
-    resp = client.patch(
-        f"/transactions/{txn.id}/status", params={"status": "accepted"}, headers=auth_headers(seller)
-    )
+    with patch("wallet_client.lock_funds", return_value={"status": "ACTIVE"}):
+        resp = client.patch(
+            f"/transactions/{txn.id}/status", params={"status": "accepted"}, headers=auth_headers(seller)
+        )
     assert resp.status_code == 200
 
 
@@ -524,9 +526,10 @@ def test_update_transaction_status_admin_can_accept(client, db_session):
     listing = make_listing(db_session, seller)
     txn = make_transaction(db_session, listing, buyer)
 
-    resp = client.patch(
-        f"/transactions/{txn.id}/status", params={"status": "accepted"}, headers=auth_headers(admin)
-    )
+    with patch("wallet_client.lock_funds", return_value={"status": "ACTIVE"}):
+        resp = client.patch(
+            f"/transactions/{txn.id}/status", params={"status": "accepted"}, headers=auth_headers(admin)
+        )
     assert resp.status_code == 200
 
 

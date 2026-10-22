@@ -204,8 +204,8 @@ def test_participants_are_id_and_role_only_no_pii(client, db_session):
 
     resp = client.get(f"/deal-room/transaction/{txn.id}", headers=auth_headers(buyer))
     body = resp.json()
-    assert body["participants"]["buyer"] == {"id": buyer.id, "role": buyer.role}
-    assert body["participants"]["seller"] == {"id": seller.id, "role": seller.role}
+    assert body["participants"]["buyer"] == {"id": buyer.id, "roles": buyer.roles}
+    assert body["participants"]["seller"] == {"id": seller.id, "roles": seller.roles}
     assert "email" not in body["participants"]["buyer"]
     assert "name" not in body["participants"]["buyer"]
 

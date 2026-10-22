@@ -27,6 +27,7 @@ from models import (
     Base, User as UserModel, Listing as ListingModel, Transaction,
 )
 from app import app, get_db, hash_password, create_access_token
+from unittest.mock import patch
 
 
 @pytest.fixture()
@@ -177,10 +178,11 @@ def test_status_update_response_includes_settlement_currency_unchanged(client, d
     listing = make_listing(db_session, seller)
     txn = make_transaction(db_session, listing, buyer, status="interested")
 
-    resp = client.patch(
-        f"/transactions/{txn.id}/status", headers=auth_headers(seller),
-        params={"status": "accepted"},
-    )
+    with patch("wallet_client.lock_funds", return_value={"status": "ACTIVE"}):
+        resp = client.patch(
+            f"/transactions/{txn.id}/status", headers=auth_headers(seller),
+            params={"status": "accepted"},
+        )
     assert resp.status_code == 200
     body = resp.json()["transaction"]
     assert body["status"] == "accepted"
