@@ -6940,6 +6940,142 @@ def get_liquidity_aggregation(
 
 
 # ---------------------------------------------------------------------------
+# M16 gap-closure item, 2026-10-22 - the general indicative price-range
+# engine, built now per Eze's explicit informed decision to proceed with
+# this previously-deferred item (claude/kevo-batch-b-full-gap-closure-
+# plan.md, Group 4). Deferred in the 2026-09-08 critical assessment
+# (claude/kevo-m16-price-discovery-critical-assessment.md) for three
+# independent reasons: a crowded incumbent category with at least one
+# directly-adjacent active patent (Caplight's US 12,243,130 B2, "Data
+# Interpolation Platform for Generating Predictive and Interpolated
+# Pricing Data"); a regulatory profile needing specific guardrails
+# (claude/kevo-m16-price-discovery-regulatory-research.md); and zero real
+# transaction data to compute a range from honestly.
+#
+# This design avoids the patent-collision risk by construction: it never
+# interpolates or predicts anything - it reports the real, observed range
+# of actual completed-transaction prices, current seller asks, and
+# current buyer demand, each independently gated by the same minimum-
+# distinct-party anonymization threshold the Demand Heatmap/Liquidity
+# Aggregation already use (MIN_DISTINCT_BUYERS). Completed transactions
+# additionally require at least 2 distinct buyer/seller pairs - the exact
+# degenerate-data problem the 2026-09-12 data-sufficiency audit found for
+# real (one listing, one buyer, one seller, duplicated three times) is
+# now a real validation, not just a deferral reason.
+#
+# Guardrails applied directly from the regulatory research: impersonal
+# (identical output for every viewer, no personalization to a specific
+# user's holdings - unauthenticated and public, matching the other three
+# anonymized aggregate endpoints above), pull-based/on-demand rather than
+# pushed at the moment of a specific solicited trade, structurally
+# separate from execution (read-only, never feeds agreed_price - the
+# standing M10/M11 invariant), gated on data sufficiency with the gate
+# shown in the response, and a disclaimer mirroring Forge Price's own
+# real-world language (the closest comparable product found in the
+# research) - informational only, never a single confident price, never
+# a commitment to transact, not confirmed by the issuer, not investment
+# advice.
+# ---------------------------------------------------------------------------
+
+def build_price_range(company, asset_type, db):
+    completed_transactions = db.query(Transaction).join(
+        ListingModel, Transaction.listing_id == ListingModel.id
+    ).filter(
+        ListingModel.company == company,
+        ListingModel.asset_type == asset_type,
+        Transaction.status == "completed"
+    ).all()
+
+    distinct_pairs = {(t.buyer_id, t.seller_id) for t in completed_transactions}
+
+    observed_price_range = None
+    if len(completed_transactions) >= MIN_DISTINCT_BUYERS and len(distinct_pairs) >= 2:
+        prices = [float(t.agreed_price) for t in completed_transactions]
+        observed_price_range = {
+            "low": min(prices),
+            "high": max(prices),
+            "sample_size": len(prices),
+            "basis": "Real completed-transaction prices on KEVO."
+        }
+
+    active_listings = db.query(ListingModel).filter(
+        ListingModel.company == company,
+        ListingModel.asset_type == asset_type,
+        ListingModel.is_transferable == True,
+        ListingModel.seller_id.isnot(None)
+    ).all()
+    distinct_sellers = {l.seller_id for l in active_listings}
+
+    current_ask_range = None
+    if len(distinct_sellers) >= MIN_DISTINCT_BUYERS:
+        asks = [float(l.asking_price) for l in active_listings]
+        current_ask_range = {
+            "low": min(asks),
+            "high": max(asks),
+            "distinct_seller_count": len(distinct_sellers),
+            "basis": "Current active seller asking prices on KEVO."
+        }
+
+    active_interests = db.query(BuyerInterest).filter(
+        BuyerInterest.company == company,
+        BuyerInterest.asset_type == asset_type,
+        BuyerInterest.status == "active"
+    ).all()
+    distinct_buyers = {i.buyer_id for i in active_interests}
+
+    current_demand_range = None
+    if len(distinct_buyers) >= MIN_DISTINCT_BUYERS:
+        max_prices = [float(i.maximum_price) for i in active_interests]
+        current_demand_range = {
+            "low": min(max_prices),
+            "high": max(max_prices),
+            "distinct_buyer_count": len(distinct_buyers),
+            "basis": "Current active buyer maximum stated prices on KEVO."
+        }
+
+    if observed_price_range is None and current_ask_range is None and current_demand_range is None:
+        return {
+            "status": "insufficient_data",
+            "company": company,
+            "asset_type": asset_type,
+            "message": (
+                "Not enough independent completed transactions, active "
+                "listings, or active buyer interest exist yet for this "
+                "company/asset type to show any price information "
+                "without risking re-identification or false precision."
+            )
+        }
+
+    return {
+        "status": "ok",
+        "company": company,
+        "asset_type": asset_type,
+        "observed_price_range": observed_price_range,
+        "current_ask_range": current_ask_range,
+        "current_demand_range": current_demand_range,
+        "disclaimer": (
+            "This is informational only, based solely on real, observed "
+            "data already on KEVO (completed-transaction prices, current "
+            "seller asking prices, current buyer-stated maximum prices). "
+            "It is not a prediction, not an interpolation, not a single "
+            "confident price, not a commitment by KEVO or any party to "
+            "transact at any price, not confirmed by the issuer, and not "
+            "investment advice. Any range shown may be based on a very "
+            "limited number of inputs."
+        )
+    }
+
+
+@app.get("/price-range")
+def get_price_range(
+    company: str,
+    asset_type: str,
+    db: Session = Depends(get_db)
+):
+    return build_price_range(company, asset_type, db)
+
+
+# ---------------------------------------------------------------------------
 # M30B — Company-Sponsored Tender Offer Program (first slice)
 # KEVO has no "company"/"issuer" login-capable actor (confirmed by direct
 # audit, 2026-09-20) and building one was confirmed out of scope. Follows
