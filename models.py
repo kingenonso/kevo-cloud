@@ -1196,3 +1196,66 @@ class SpeedDiscountOffer(Base):
     notes = Column(String(1000), nullable=True)
     status = Column(String(50), nullable=False, default="active")
     created_at = Column(DateTime, nullable=False)
+
+
+class LiquidityEventSignal(Base):
+    """
+    M31 - Liquidity Event Radar (admin-entered MVP), 2026-10-22. Was
+    explicitly parked since 2026-09-05 pending its own dedicated research
+    pass on information sourcing, confidentiality, and market-abuse/
+    insider-information risk (claude/kevo-m31-liquidity-event-radar-
+    research.md) - this is that research's resulting design, confirmed
+    with Eze via AskUserQuestion 2026-10-22.
+
+    Fixed, non-negotiable scope carried over from the master handoff:
+    signals are drawn strictly from events that are already publicly
+    disclosed (a closed/announced funding round, an S-1/IPO filing, a
+    publicly announced tender offer or M&A transaction) - never a
+    predictive or inferred signal about a not-yet-public event. That
+    boundary is enforced by event_type's app-level allow-list
+    (LIQUIDITY_EVENT_SIGNAL_TYPES in app.py), which deliberately has no
+    "rumored"/"expected" option.
+
+    Admin-entered, not a live scraper: no real EDGAR-redistribution ToS
+    clearance or third-party data-source credentials exist yet (the
+    research flagged both as open items), so an admin records a real
+    event with a required source_url and the source's own
+    source_disclosed_at timestamp - the same admin-attested pattern
+    already used for RofrRequest/SettlementRecord/TenderOfferProgram.
+
+    draft -> published -> retracted is deliberately a real workflow, not
+    decoration: SEC v. Texas Gulf Sulphur holds that "technically public"
+    isn't the same as "the market has had a reasonable opportunity to
+    react," and no source found gives a fixed safe-harbor delay. Rather
+    than invent one (the same restraint M25 showed refusing to invent a
+    ROFR deadline), Eze confirmed 2026-10-22: no fixed timer - an admin
+    reviews each candidate event and makes their own judgment call about
+    when it's genuinely digested before publishing it. A signal is only
+    ever visible to a non-admin once published_at is set. retracted
+    handles the real risk (also flagged in the research) that a filing
+    is later amended or turns out inaccurate - it stays in the table for
+    audit purposes rather than being deleted.
+
+    Deliberately impersonal: GET /liquidity-event-signals returns the
+    exact same published signals to every viewer, never filtered or
+    tailored to a specific user's holdings or stated interest. This is
+    the concrete design lever the research identified as the strongest
+    fit for the Investment Advisers Act's publisher's exclusion (Lowe v.
+    SEC) - general, regular, non-personalized circulation of genuinely
+    public information, not individualized investment advice.
+    """
+    __tablename__ = "liquidity_event_signals"
+
+    id = Column(Integer, primary_key=True)
+    company = Column(String(255), nullable=False)
+    asset_type = Column(String(100), nullable=False)
+    event_type = Column(String(50), nullable=False)
+    description = Column(String(1000), nullable=False)
+    source_url = Column(String(1000), nullable=False)
+    source_disclosed_at = Column(DateTime, nullable=False)
+    status = Column(String(50), nullable=False, default="draft")
+    published_at = Column(DateTime, nullable=True)
+    retracted_at = Column(DateTime, nullable=True)
+    retraction_notes = Column(String(1000), nullable=True)
+    created_by_admin_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, nullable=False)

@@ -32,6 +32,7 @@ from models import SecondaryAuctionBid
 from models import ComplianceRuleChangeAlert
 from models import Message
 from models import LiquidityCommitment
+from models import LiquidityEventSignal
 from models import SpeedDiscountOffer
 import escrow_client
 import wallet_client
@@ -9060,6 +9061,183 @@ def withdraw_liquidity_commitment(
     db.refresh(commitment)
 
     return _serialize_commitment(commitment)
+
+
+# ---------------------------------------------------------------------------
+# M31 - Liquidity Event Radar (admin-entered MVP), 2026-10-22.
+#
+# Was explicitly parked since 2026-09-05 pending its own dedicated research
+# pass on information sourcing, confidentiality, and market-abuse/insider-
+# information risk (claude/kevo-m31-liquidity-event-radar-research.md).
+# Design confirmed with Eze via AskUserQuestion, 2026-10-22: no fixed
+# digestion-delay timer (an admin makes their own judgment call per event
+# about when it's genuinely digested before publishing it), and an
+# admin-entered MVP rather than a live scraper (no real EDGAR-
+# redistribution ToS clearance or third-party data credentials exist yet).
+#
+# event_type is a closed allow-list, deliberately with no "rumored" or
+# "expected" option - signals are drawn strictly from events that are
+# already publicly disclosed, never a predictive or inferred signal about
+# a not-yet-public event. GET is deliberately impersonal: every viewer
+# sees the exact same published signals for a company, never filtered to
+# a specific user's holdings - the design lever the research identified
+# as the strongest fit for the Investment Advisers Act's publisher's
+# exclusion (Lowe v. SEC).
+# ---------------------------------------------------------------------------
+
+LIQUIDITY_EVENT_SIGNAL_TYPES = {
+    "funding_round_announced",
+    "ipo_s1_filed",
+    "tender_offer_announced",
+    "ma_transaction_announced",
+}
+
+
+def _serialize_liquidity_event_signal(s: LiquidityEventSignal):
+    return {
+        "id": s.id,
+        "company": s.company,
+        "asset_type": s.asset_type,
+        "event_type": s.event_type,
+        "description": s.description,
+        "source_url": s.source_url,
+        "source_disclosed_at": s.source_disclosed_at,
+        "status": s.status,
+        "published_at": s.published_at,
+        "retracted_at": s.retracted_at,
+        "retraction_notes": s.retraction_notes,
+        "created_at": s.created_at,
+        "disclaimer": (
+            "This reflects an already publicly disclosed event, cited at "
+            "the source above. It is not investment advice, not a "
+            "prediction, and not a KEVO-formed opinion about any "
+            "company's value or prospects."
+        ),
+    }
+
+
+@app.post("/liquidity-event-signals")
+def create_liquidity_event_signal(
+    company: str,
+    asset_type: str,
+    event_type: str,
+    description: str,
+    source_url: str,
+    source_disclosed_at: datetime,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can create a liquidity event signal")
+    if event_type not in LIQUIDITY_EVENT_SIGNAL_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"event_type must be one of: {', '.join(sorted(LIQUIDITY_EVENT_SIGNAL_TYPES))}"
+        )
+    if not source_url.strip():
+        raise HTTPException(status_code=400, detail="source_url is required - this must cite a real, dated public disclosure")
+    if source_disclosed_at > datetime.utcnow():
+        raise HTTPException(status_code=400, detail="source_disclosed_at cannot be in the future")
+    signal = LiquidityEventSignal(
+        company=company,
+        asset_type=asset_type,
+        event_type=event_type,
+        description=description,
+        source_url=source_url,
+        source_disclosed_at=source_disclosed_at,
+        status="draft",
+        created_by_admin_id=current_user.id,
+        created_at=datetime.utcnow(),
+    )
+    db.add(signal)
+    db.commit()
+    db.refresh(signal)
+    return _serialize_liquidity_event_signal(signal)
+
+
+@app.put("/liquidity-event-signals/{signal_id}/publish")
+def publish_liquidity_event_signal(
+    signal_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    The admin's own explicit judgment call that this event has had a
+    reasonable opportunity to be absorbed by the market before KEVO
+    surfaces it - no fixed timer computes or defaults this (confirmed
+    with Eze, 2026-10-22). Only a draft signal can be published.
+    """
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can publish a liquidity event signal")
+    signal = db.query(LiquidityEventSignal).filter(LiquidityEventSignal.id == signal_id).first()
+    if signal is None:
+        raise HTTPException(status_code=404, detail="Liquidity event signal not found")
+    if signal.status != "draft":
+        raise HTTPException(status_code=400, detail="Only a draft signal can be published")
+    signal.status = "published"
+    signal.published_at = datetime.utcnow()
+    db.commit()
+    db.refresh(signal)
+    return _serialize_liquidity_event_signal(signal)
+
+
+@app.put("/liquidity-event-signals/{signal_id}/retract")
+def retract_liquidity_event_signal(
+    signal_id: int,
+    retraction_notes: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    For when a published signal's underlying filing/announcement turns
+    out amended, retracted, or inaccurate - kept in the table for audit
+    purposes (consistent with AuditLogEntry's append-only discipline)
+    rather than deleted, and immediately stops appearing to non-admins.
+    """
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can retract a liquidity event signal")
+    signal = db.query(LiquidityEventSignal).filter(LiquidityEventSignal.id == signal_id).first()
+    if signal is None:
+        raise HTTPException(status_code=404, detail="Liquidity event signal not found")
+    if signal.status != "published":
+        raise HTTPException(status_code=400, detail="Only a published signal can be retracted")
+    signal.status = "retracted"
+    signal.retracted_at = datetime.utcnow()
+    signal.retraction_notes = retraction_notes
+    db.commit()
+    db.refresh(signal)
+    return _serialize_liquidity_event_signal(signal)
+
+
+@app.get("/liquidity-event-signals")
+def get_liquidity_event_signals(
+    company: str | None = None,
+    asset_type: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    query = db.query(LiquidityEventSignal)
+    if current_user.account_type != "admin":
+        query = query.filter(LiquidityEventSignal.status == "published")
+    if company is not None:
+        query = query.filter(LiquidityEventSignal.company == company)
+    if asset_type is not None:
+        query = query.filter(LiquidityEventSignal.asset_type == asset_type)
+    return [_serialize_liquidity_event_signal(s) for s in query.all()]
+
+
+@app.get("/liquidity-event-signals/{signal_id}")
+def get_liquidity_event_signal(
+    signal_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    signal = db.query(LiquidityEventSignal).filter(LiquidityEventSignal.id == signal_id).first()
+    if signal is None:
+        raise HTTPException(status_code=404, detail="Liquidity event signal not found")
+    if current_user.account_type != "admin" and signal.status != "published":
+        raise HTTPException(status_code=404, detail="Liquidity event signal not found")
+    return _serialize_liquidity_event_signal(signal)
 
 
 # M15 gap-closure item, 2026-10-22 - Discount-for-Speed.
