@@ -738,6 +738,20 @@ class TenderOfferProgram(Base):
     source_reference = Column(String(500), nullable=True)
     created_at = Column(DateTime, nullable=False)
 
+    # M30B gap-closure wiring, 2026-10-22 - recurring open/close schedule
+    # support. recurrence_interval_days is the company's own stated cadence
+    # (e.g. 182 for "about every January and July") - KEVO stores it but
+    # never auto-generates a new cycle on a timer (no background scheduler
+    # exists in this stack, and silently spinning one up was never asked
+    # for); POST /tender-offer-programs/{id}/next-cycle is an explicit
+    # admin action that uses this interval to compute the next window's
+    # dates, while still requiring the admin to restate price_per_share
+    # every cycle - a commercial term is never carried over silently,
+    # preserving the standing no-trade-term-setting invariant.
+    is_recurring = Column(Boolean, nullable=False, default=False)
+    recurrence_interval_days = Column(Integer, nullable=True)
+    previous_program_id = Column(Integer, ForeignKey("tender_offer_programs.id"), nullable=True)
+
 
 class TenderOfferElection(Base):
     """
@@ -747,6 +761,22 @@ class TenderOfferElection(Base):
     check M13/M26B already enforce elsewhere. shares_accepted stays null
     until an admin finalizes the election, recording the company's own real
     allocation decision - KEVO never computes or suggests an allocation.
+
+    M30B gap-closure wiring, 2026-10-22 - transfer_reviewed / rofr_cleared
+    added per the first slice's own documented gap ("transfer review, ROFR,
+    and settlement are not yet wired into the program flow"). Deliberately
+    simple admin-attested flags here, not a reuse of RofrRequest's own
+    transaction_id-keyed table: a company tender offer's counterparty is
+    the company itself, and standard ROFR drafting almost always carves
+    out repurchases by the issuer from ROFR entirely (ROFR exists to
+    control who ELSE becomes a shareholder, which doesn't happen in a
+    buyback) - so treating ROFR as a mandatory gate here would likely be
+    legally backwards for the common case. rofr_cleared therefore stays
+    optional/informational (an admin records it only when a specific
+    company's agreement is unusual enough to require it), while
+    transfer_reviewed is a hard gate before settlement can begin, since
+    every real buyback genuinely needs the company's own transfer/cap-
+    table approval step regardless of ROFR.
     """
     __tablename__ = "tender_offer_elections"
 
@@ -759,6 +789,42 @@ class TenderOfferElection(Base):
     status = Column(String(50), nullable=False, default="pending")
     created_at = Column(DateTime, nullable=False)
     decided_at = Column(DateTime, nullable=True)
+    transfer_reviewed = Column(Boolean, nullable=False, default=False)
+    transfer_reviewed_at = Column(DateTime, nullable=True)
+    rofr_cleared = Column(Boolean, nullable=True)
+    rofr_notes = Column(String(1000), nullable=True)
+
+
+class TenderOfferSettlement(Base):
+    """
+    M30B gap-closure wiring, 2026-10-22 - settlement tracking for an
+    accepted TenderOfferElection, mirroring SettlementRecord's exact
+    admin-attested, sequential-release shape (funds_received -> shares_
+    confirmed_transferable -> funds_released). Keyed to election_id, not
+    transaction_id, because a tender offer buyback has no Transaction row
+    to attach to - KEVO deliberately has no company/issuer login actor
+    (confirmed out of scope, M30B's own research doc), so there is no real
+    buyer User to construct a Transaction with. Building one with a fake
+    placeholder buyer would be exactly the kind of fabricated specificity
+    this project avoids, so this is a parallel, purpose-fit table instead
+    of a forced reuse. No Escrow.com integration (M26E's scope) - a
+    company's own buyback payment is a treasury/payroll-style disbursement
+    the company makes directly, not a peer-to-peer escrow flow, so this
+    stays at M26's original base-layer admin-attestation shape.
+    """
+    __tablename__ = "tender_offer_settlements"
+
+    id = Column(Integer, primary_key=True)
+    election_id = Column(Integer, ForeignKey("tender_offer_elections.id"), nullable=False, unique=True)
+    status = Column(String(50), nullable=False, default="pending")
+    funds_received = Column(Boolean, nullable=False, default=False)
+    funds_received_at = Column(DateTime, nullable=True)
+    shares_confirmed_transferable = Column(Boolean, nullable=False, default=False)
+    shares_confirmed_transferable_at = Column(DateTime, nullable=True)
+    funds_released = Column(Boolean, nullable=False, default=False)
+    funds_released_at = Column(DateTime, nullable=True)
+    notes = Column(String(1000), nullable=True)
+    created_at = Column(DateTime, nullable=False)
 
 
 class DealAlert(Base):

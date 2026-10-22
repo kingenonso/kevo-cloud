@@ -25,7 +25,7 @@ import calendar
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection, DealAlert, PasswordResetToken, WithdrawalConfirmation, AuditLogEntry, SellerFinancingAgreement, SellerFinancingPayment, SellerFinancingReserve, SellerFinancingCollateral
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection, TenderOfferSettlement, DealAlert, PasswordResetToken, WithdrawalConfirmation, AuditLogEntry, SellerFinancingAgreement, SellerFinancingPayment, SellerFinancingReserve, SellerFinancingCollateral
 from models import Transaction
 from models import DueDiligenceChecklistItem
 from models import SecondaryAuctionBid
@@ -6965,6 +6965,8 @@ def create_tender_offer_program(
     opens_at: datetime,
     closes_at: datetime,
     source_reference: str | None = None,
+    is_recurring: bool = False,
+    recurrence_interval_days: int | None = None,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user)
 ):
@@ -6979,6 +6981,11 @@ def create_tender_offer_program(
         raise HTTPException(status_code=400, detail="Price per share must be greater than zero")
     if closes_at <= opens_at:
         raise HTTPException(status_code=400, detail="Closing time must be after opening time")
+    if is_recurring and (recurrence_interval_days is None or recurrence_interval_days <= 0):
+        raise HTTPException(
+            status_code=400,
+            detail="recurrence_interval_days must be a positive number of days when is_recurring is true"
+        )
     program = TenderOfferProgram(
         company=company,
         jurisdiction=jurisdiction,
@@ -6987,12 +6994,83 @@ def create_tender_offer_program(
         closes_at=closes_at,
         status="open",
         source_reference=source_reference,
+        is_recurring=is_recurring,
+        recurrence_interval_days=recurrence_interval_days if is_recurring else None,
         created_at=datetime.utcnow()
     )
     db.add(program)
     db.commit()
     db.refresh(program)
     return program
+
+
+@app.post("/tender-offer-programs/{program_id}/next-cycle")
+def create_next_tender_offer_cycle(
+    program_id: int,
+    price_per_share: float,
+    opens_at: datetime | None = None,
+    closes_at: datetime | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    M30B gap-closure wiring, 2026-10-22 - recurring open/close schedule
+    support. Explicit admin action, not an automatic timer (no background
+    scheduler exists in this stack): rolls a closed, is_recurring program
+    forward into its next cycle, reusing company/jurisdiction and the
+    stored recurrence_interval_days to default the next window's dates.
+    price_per_share must always be restated explicitly by the admin - a
+    commercial term is never carried over silently (the standing no-
+    trade-term-setting invariant applies here exactly as it does to the
+    very first cycle).
+    """
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can start the next tender offer cycle")
+    program = db.query(TenderOfferProgram).filter(TenderOfferProgram.id == program_id).first()
+    if program is None:
+        raise HTTPException(status_code=404, detail="Tender offer program not found")
+    if not program.is_recurring:
+        raise HTTPException(status_code=400, detail="This tender offer program is not set up as recurring")
+    if program.status != "closed":
+        raise HTTPException(status_code=400, detail="The current cycle must be closed before starting the next one")
+    if price_per_share <= 0:
+        raise HTTPException(status_code=400, detail="Price per share must be greater than zero")
+    if program.jurisdiction in TENDER_OFFER_EXCLUDED_JURISDICTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Canada is not yet supported for tender offer programs - current Canadian securities law lacks a clean small-private-company issuer-bid exemption for this"
+        )
+
+    next_opens_at = opens_at if opens_at is not None else program.closes_at
+    if closes_at is not None:
+        next_closes_at = closes_at
+    else:
+        if program.recurrence_interval_days is None:
+            raise HTTPException(
+                status_code=400,
+                detail="closes_at must be provided explicitly - this program has no recurrence_interval_days to default from"
+            )
+        next_closes_at = next_opens_at + timedelta(days=program.recurrence_interval_days)
+    if next_closes_at <= next_opens_at:
+        raise HTTPException(status_code=400, detail="Closing time must be after opening time")
+
+    next_program = TenderOfferProgram(
+        company=program.company,
+        jurisdiction=program.jurisdiction,
+        price_per_share=price_per_share,
+        opens_at=next_opens_at,
+        closes_at=next_closes_at,
+        status="open",
+        source_reference=program.source_reference,
+        is_recurring=True,
+        recurrence_interval_days=program.recurrence_interval_days,
+        previous_program_id=program.id,
+        created_at=datetime.utcnow()
+    )
+    db.add(next_program)
+    db.commit()
+    db.refresh(next_program)
+    return next_program
 
 
 @app.get("/tender-offer-programs")
@@ -7146,6 +7224,66 @@ def finalize_tender_offer_election(
     return election
 
 
+@app.put("/tender-offer-elections/{election_id}/transfer-review")
+def review_tender_offer_election_transfer(
+    election_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    M30B gap-closure wiring, 2026-10-22. Admin attestation that the
+    company's own transfer/cap-table approval step happened for this
+    accepted election - a hard gate before settlement tracking can begin
+    (POST /tender-offer-settlements requires this). Every real buyback
+    needs this regardless of ROFR.
+    """
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can record a transfer review")
+    election = db.query(TenderOfferElection).filter(TenderOfferElection.id == election_id).first()
+    if election is None:
+        raise HTTPException(status_code=404, detail="Tender offer election not found")
+    if election.status != "accepted":
+        raise HTTPException(status_code=400, detail="Only an accepted election can be transfer-reviewed")
+    election.transfer_reviewed = True
+    election.transfer_reviewed_at = datetime.utcnow()
+    db.commit()
+    db.refresh(election)
+    return election
+
+
+@app.put("/tender-offer-elections/{election_id}/rofr-review")
+def review_tender_offer_election_rofr(
+    election_id: int,
+    cleared: bool,
+    notes: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    M30B gap-closure wiring, 2026-10-22. Optional, informational admin
+    attestation only - NOT a settlement gate. Standard ROFR drafting
+    almost always carves out repurchases by the issuer itself (ROFR
+    exists to control who else becomes a shareholder, which doesn't
+    happen in a buyback), so most tender-offer elections will never need
+    this reviewed at all. It exists for the less common case where a
+    specific company's own agreement requires ROFR consent even for a
+    buyback, so an admin has somewhere real to record that determination
+    rather than it being untracked.
+    """
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can record a ROFR review")
+    election = db.query(TenderOfferElection).filter(TenderOfferElection.id == election_id).first()
+    if election is None:
+        raise HTTPException(status_code=404, detail="Tender offer election not found")
+    if election.status != "accepted":
+        raise HTTPException(status_code=400, detail="Only an accepted election can be ROFR-reviewed")
+    election.rofr_cleared = cleared
+    election.rofr_notes = notes
+    db.commit()
+    db.refresh(election)
+    return election
+
+
 @app.get("/tender-offer-elections")
 def get_tender_offer_elections(
     db: Session = Depends(get_db),
@@ -7168,6 +7306,155 @@ def get_tender_offer_election(
     if current_user.account_type != "admin" and election.holder_id != current_user.id:
         raise HTTPException(status_code=403, detail="You do not have access to this tender offer election")
     return election
+
+
+# ---------------------------------------------------------------------------
+# M30B gap-closure wiring, 2026-10-22 - Tender Offer Settlement.
+# Mirrors SettlementRecord's exact admin-attested, sequential-release
+# shape (funds_received -> shares_confirmed_transferable -> funds_released)
+# but keyed to election_id rather than transaction_id - see
+# TenderOfferSettlement's own docstring in models.py for why a tender
+# offer buyback has no Transaction row to attach to. A settlement cannot
+# be created until the election's transfer_reviewed flag is set (the
+# company's own transfer/cap-table approval), so this stays a real
+# pipeline (accept -> transfer review -> settlement) rather than a
+# disconnected tracking table. No Escrow.com integration - stays at
+# M26's original base-layer shape, since a company's own buyback payment
+# is a direct treasury disbursement, not a peer-to-peer escrow flow.
+# ---------------------------------------------------------------------------
+
+@app.post("/tender-offer-settlements")
+def create_tender_offer_settlement(
+    election_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can create a tender offer settlement")
+    election = db.query(TenderOfferElection).filter(TenderOfferElection.id == election_id).first()
+    if election is None:
+        raise HTTPException(status_code=404, detail="Tender offer election not found")
+    if election.status != "accepted":
+        raise HTTPException(status_code=400, detail="Only an accepted election can have a settlement")
+    if not election.transfer_reviewed:
+        raise HTTPException(
+            status_code=400,
+            detail="This election must be transfer-reviewed before settlement tracking can begin"
+        )
+    existing = db.query(TenderOfferSettlement).filter(TenderOfferSettlement.election_id == election_id).first()
+    if existing is not None:
+        raise HTTPException(status_code=400, detail="A settlement already exists for this election")
+    settlement = TenderOfferSettlement(
+        election_id=election_id,
+        status="pending",
+        created_at=datetime.utcnow()
+    )
+    db.add(settlement)
+    db.commit()
+    db.refresh(settlement)
+    return settlement
+
+
+@app.get("/tender-offer-settlements")
+def get_tender_offer_settlements(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type == "admin":
+        return db.query(TenderOfferSettlement).all()
+    own_election_ids = [
+        e.id for e in db.query(TenderOfferElection).filter(
+            TenderOfferElection.holder_id == current_user.id
+        ).all()
+    ]
+    return db.query(TenderOfferSettlement).filter(
+        TenderOfferSettlement.election_id.in_(own_election_ids)
+    ).all()
+
+
+@app.get("/tender-offer-settlements/{settlement_id}")
+def get_tender_offer_settlement(
+    settlement_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    settlement = db.query(TenderOfferSettlement).filter(TenderOfferSettlement.id == settlement_id).first()
+    if settlement is None:
+        raise HTTPException(status_code=404, detail="Tender offer settlement not found")
+    election = db.query(TenderOfferElection).filter(TenderOfferElection.id == settlement.election_id).first()
+    if current_user.account_type != "admin" and (election is None or election.holder_id != current_user.id):
+        raise HTTPException(status_code=403, detail="You do not have access to this tender offer settlement")
+    return settlement
+
+
+@app.put("/tender-offer-settlements/{settlement_id}/confirm-funds-received")
+def confirm_tender_offer_funds_received(
+    settlement_id: int,
+    notes: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can confirm funds received")
+    settlement = db.query(TenderOfferSettlement).filter(TenderOfferSettlement.id == settlement_id).first()
+    if settlement is None:
+        raise HTTPException(status_code=404, detail="Tender offer settlement not found")
+    settlement.funds_received = True
+    settlement.funds_received_at = datetime.utcnow()
+    if notes is not None:
+        settlement.notes = notes
+    if settlement.status == "pending":
+        settlement.status = "in_progress"
+    db.commit()
+    db.refresh(settlement)
+    return settlement
+
+
+@app.put("/tender-offer-settlements/{settlement_id}/confirm-shares-transferable")
+def confirm_tender_offer_shares_transferable(
+    settlement_id: int,
+    notes: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can confirm shares are transferable")
+    settlement = db.query(TenderOfferSettlement).filter(TenderOfferSettlement.id == settlement_id).first()
+    if settlement is None:
+        raise HTTPException(status_code=404, detail="Tender offer settlement not found")
+    settlement.shares_confirmed_transferable = True
+    settlement.shares_confirmed_transferable_at = datetime.utcnow()
+    if notes is not None:
+        settlement.notes = notes
+    if settlement.status == "pending":
+        settlement.status = "in_progress"
+    db.commit()
+    db.refresh(settlement)
+    return settlement
+
+
+@app.put("/tender-offer-settlements/{settlement_id}/release-funds")
+def release_tender_offer_settlement_funds(
+    settlement_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can release tender offer settlement funds")
+    settlement = db.query(TenderOfferSettlement).filter(TenderOfferSettlement.id == settlement_id).first()
+    if settlement is None:
+        raise HTTPException(status_code=404, detail="Tender offer settlement not found")
+    if not (settlement.funds_received and settlement.shares_confirmed_transferable):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot release funds until both funds_received and shares_confirmed_transferable are confirmed"
+        )
+    settlement.funds_released = True
+    settlement.funds_released_at = datetime.utcnow()
+    settlement.status = "completed"
+    db.commit()
+    db.refresh(settlement)
+    return settlement
 
 
 # ---------------------------------------------------------------------------
