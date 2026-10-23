@@ -1,7 +1,7 @@
 """
 Tests for M14 (Transferability Intelligence Engine) - written against the
 REAL ~/KEVO implementation (2026-09-09), not the disconnected sandbox
-build described in claude/kevo-m14-implementation-summary.md (that doc's
+build described in kevo-m14-implementation-summary.md (that doc's
 own header names /root/workspace/kevo - a different, never-connected
 copy of this project). Every function/field name below was confirmed by
 directly reading the real app.py/models.py this session before writing

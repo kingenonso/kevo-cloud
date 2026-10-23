@@ -2,7 +2,7 @@
 Tests for M19 Authorization (2026-09-18) - identity-to-resource-relationship
 based authorization, replacing M1-M18's role-label checks. Written against
 the REAL ~/KEVO implementation, per the architecture audit approved in
-claude/kevo-m19-authorization-architecture-audit-and-design.md.
+kevo-m19-authorization-architecture-audit-and-design.md.
 
 Core pattern under test: every gated endpoint now checks current_user.id
 against the resource's actual owning/party id(s) - not the role recorded

@@ -5708,7 +5708,7 @@ def get_deal_room(
 # to respond to a ROFR notice) and is empty for the one real ROFR rule that
 # exists (ZA-COMPANIES-S8-ROFR-CONSENT). Also deliberately avoids an
 # auto-triggered countdown -- the specific mechanism flagged as
-# patent-adjacent in claude/kevo-m25-rofr-patent-claim-analysis.md
+# patent-adjacent in kevo-m25-rofr-patent-claim-analysis.md
 # (Nasdaq Private Market US 12,572,980).
 #
 # KEVO has no "issuer" or "existing shareholder" user concept yet, so this
@@ -5818,7 +5818,7 @@ def get_rofr_request(
 #
 # KEVO never holds client funds or acts as custodian -- that would create
 # real money-transmitter and (per the California DFPI Escrow Law example
-# already researched, see claude/kevo-automation-first-features-assessment.md)
+# already researched, see kevo-automation-first-features-assessment.md)
 # potentially state escrow-licensing exposure. This tracks the real-world
 # confirmations a licensed escrow/bank provider would report once KEVO
 # integrates with one -- it does not move money itself.
@@ -6858,7 +6858,7 @@ def get_demand_curve(
 # M16B (narrowed, 2026-09-11/12) - Aggregate Demand/Supply Indicator
 # Full multi-party transaction coordination (KEVO's own logic deciding which
 # buyers combine with which sellers) was NOT built - see
-# claude/kevo-m16b-liquidity-aggregation-critical-assessment.md. Every real
+# kevo-m16b-liquidity-aggregation-critical-assessment.md. Every real
 # comparable platform's multi-party matching function sits inside a
 # registered broker-dealer/ATS; this stays on the same safe, aggregate-only
 # footing already used by the Demand Heatmap above instead. Pure quantity
@@ -6944,14 +6944,14 @@ def get_liquidity_aggregation(
 # ---------------------------------------------------------------------------
 # M16 gap-closure item, 2026-10-22 - the general indicative price-range
 # engine, built now per Eze's explicit informed decision to proceed with
-# this previously-deferred item (claude/kevo-batch-b-full-gap-closure-
+# this previously-deferred item (kevo-batch-b-full-gap-closure-
 # plan.md, Group 4). Deferred in the 2026-09-08 critical assessment
-# (claude/kevo-m16-price-discovery-critical-assessment.md) for three
+# (kevo-m16-price-discovery-critical-assessment.md) for three
 # independent reasons: a crowded incumbent category with at least one
 # directly-adjacent active patent (Caplight's US 12,243,130 B2, "Data
 # Interpolation Platform for Generating Predictive and Interpolated
 # Pricing Data"); a regulatory profile needing specific guardrails
-# (claude/kevo-m16-price-discovery-regulatory-research.md); and zero real
+# (kevo-m16-price-discovery-regulatory-research.md); and zero real
 # transaction data to compute a range from honestly.
 #
 # This design avoids the patent-collision risk by construction: it never
@@ -7087,7 +7087,7 @@ def get_price_range(
 # agreed to outside the platform. KEVO never sets, suggests, or computes
 # an allocation - the admin records the company's own real decision,
 # preserving the standing no-trade-term-setting invariant (2026-09-09).
-# Jurisdictional research (claude/kevo-m30b-tender-offer-program-research-
+# Jurisdictional research (kevo-m30b-tender-offer-program-research-
 # and-audit.md) found Canada currently lacks a clean small-private-company
 # issuer-bid exemption, so Canada is deliberately excluded here - the CSA's
 # proposed Selective Repurchase Exemption is not yet in force.
@@ -9206,7 +9206,7 @@ def withdraw_liquidity_commitment(
 #
 # Was explicitly parked since 2026-09-05 pending its own dedicated research
 # pass on information sourcing, confidentiality, and market-abuse/insider-
-# information risk (claude/kevo-m31-liquidity-event-radar-research.md).
+# information risk (kevo-m31-liquidity-event-radar-research.md).
 # Design confirmed with Eze via AskUserQuestion, 2026-10-22: no fixed
 # digestion-delay timer (an admin makes their own judgment call per event
 # about when it's genuinely digested before publishing it), and an
@@ -9621,7 +9621,7 @@ def get_time_to_sale_stats(
 # M17B - SPV Fractional Ownership Pools, back-office-administrator-only
 # scope, 2026-10-22.
 #
-# M17B's own prior research (claude/kevo-m17b-spv-critical-assessment.md,
+# M17B's own prior research (kevo-m17b-spv-critical-assessment.md,
 # 2026-09-12) found every real pooled-SPV platform runs one of three ways:
 # (1) inside a registered broker-dealer, (2) through a registered
 # investment adviser under narrow no-transaction-fee conditions, or (3) as
@@ -9888,7 +9888,7 @@ def withdraw_spv_pool_commitment(
 # M25B - Forward Sale / Pre-Liquidity-Event Contracts, structured-safe
 # scope, 2026-10-23.
 #
-# M25B's own prior research (claude/kevo-m25b-forward-sale-legal-
+# M25B's own prior research (kevo-m25b-forward-sale-legal-
 # research.md, 2026-09-18) found three independent obstacles: (1)
 # Dodd-Frank security-based-swap reclassification risk on a forward over
 # still-restricted shares, avoidable by limiting buyers to Eligible

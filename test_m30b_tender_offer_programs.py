@@ -9,7 +9,7 @@ verified ownership record in that company can elect to participate.
 Admin finalizes each election, recording the company's own real
 accept/decline decision and share count - KEVO never computes or suggests
 an allocation. Canada is deliberately excluded (see
-claude/kevo-m30b-tender-offer-program-research-and-audit.md).
+kevo-m30b-tender-offer-program-research-and-audit.md).
 """
 import os
 os.environ.setdefault("DB_HOST", "localhost")

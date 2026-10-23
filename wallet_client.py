@@ -3,10 +3,10 @@ M32 - KEVO Wallet Service client.
 
 Thin wrapper around KEVO's own internal wallet/ledger service
 (kevo-wallet-service, a separate Java/Spring Boot application - see
-claude/kevo-language-assignment-policy.md for why the wallet is a
+kevo-language-assignment-policy.md for why the wallet is a
 dedicated service rather than living inside this app). This wallet
 tracks fictional/demo money only for the prototype (see
-claude/kevo-wallet-funding-withdrawal-milestone-spec.md, Sections 27-28).
+kevo-wallet-funding-withdrawal-milestone-spec.md, Sections 27-28).
 It is a deliberately separate system from the real, non-custodial
 Escrow.com settlement path in escrow_client.py - real settlement money
 never touches this wallet.

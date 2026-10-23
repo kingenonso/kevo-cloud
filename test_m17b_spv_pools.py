@@ -4,7 +4,7 @@ administrator-only scope (POST/GET/close/cancel /spv-pools,
 POST/GET /spv-pools/{id}/commitments, PUT /spv-pool-commitments/{id}/
 withdraw), 2026-10-22.
 
-M17B was formally deferred on 2026-09-12 (claude/kevo-m17b-spv-critical-
+M17B was formally deferred on 2026-09-12 (kevo-m17b-spv-critical-
 assessment.md) because the originally-scoped "KEVO itself sponsors/
 pools user capital" shape needs broker-dealer or investment-adviser
 registration KEVO doesn't have. That research also found a third real

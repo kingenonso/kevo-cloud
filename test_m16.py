@@ -1,7 +1,7 @@
 """
 Tests for M16 (Demand Heatmap / Blind Demand Curve) - written against the
 REAL ~/KEVO implementation (2026-09-09). M16's own implementation summary
-(claude/kevo-m16-implementation-summary.md) claims "15 tests in test_app.py,
+(kevo-m16-implementation-summary.md) claims "15 tests in test_app.py,
 all passing" - that file does not exist anywhere in this repo. This is the
 first real test coverage this feature has ever had.
 

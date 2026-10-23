@@ -4,7 +4,7 @@ evidence-backed KYCFact records, mirroring the InvestorEligibility
 self-submit / admin-verify pattern and staying fully M19-compliant
 (identity-to-resource authorization). Written against the REAL ~/KEVO
 implementation, per the design approved in
-claude/kevo-m20-kyc-aml-architecture-design.md.
+kevo-m20-kyc-aml-architecture-design.md.
 
 Scope of this slice: users can self-submit their own KYCFact (starts
 "pending"), only an admin can verify/reject it. User.kyc_status is

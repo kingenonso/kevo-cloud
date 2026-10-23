@@ -12,7 +12,7 @@ record the real-world outcome (approved / waived / exercised). GET
 
 Still deliberately avoids any auto-triggered countdown or automatic
 escalation when a deadline passes -- see
-claude/kevo-m25-rofr-patent-claim-analysis.md for why. As of 2026-09-25,
+kevo-m25-rofr-patent-claim-analysis.md for why. As of 2026-09-25,
 response_due_date is computed from TransferabilityRule.rofr_response_window_days
 when that rule has a real, sourced window on file; it stays null otherwise --
 no jurisdiction-wide deadline is ever invented (confirmed by research: ROFR

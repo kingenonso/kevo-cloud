@@ -3,7 +3,7 @@ Tests for M31's Liquidity Event Radar (admin-entered MVP), 2026-10-22
 (POST/publish/retract/GET /liquidity-event-signals).
 
 Explicitly parked since 2026-09-05 pending its own dedicated research
-pass (claude/kevo-m31-liquidity-event-radar-research.md) - this is the
+pass (kevo-m31-liquidity-event-radar-research.md) - this is the
 resulting design, confirmed with Eze via AskUserQuestion: no fixed
 digestion-delay timer (admin judgment per event), admin-entered MVP (no
 live scraper). Written against the real ~/KEVO implementation, same

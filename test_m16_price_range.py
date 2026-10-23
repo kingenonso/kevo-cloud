@@ -1,6 +1,6 @@
 """
 Tests for M16's general indicative price-range engine (admin-approved,
-built 2026-10-22 per claude/kevo-batch-b-full-gap-closure-plan.md Group
+built 2026-10-22 per kevo-batch-b-full-gap-closure-plan.md Group
 4): GET /price-range.
 
 Design: build_price_range(company, asset_type, db) reports the real,

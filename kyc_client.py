@@ -18,7 +18,7 @@ verified production app later is a config change (SUMSUB_APP_TOKEN /
 SUMSUB_SECRET_KEY), not a code change.
 
 This is scaffolding only, built against sandbox/placeholder credentials
-per the Batch B governing decision (claude/kevo-batch-b-full-gap-closure-
+per the Batch B governing decision (kevo-batch-b-full-gap-closure-
 plan.md) - no real applicant has ever been created against a live account
 through this client, and KYCFact rows are still entered the same
 self-submit/admin-verify way M20 already built. Wiring this client's

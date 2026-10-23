@@ -3,7 +3,7 @@ Tests for M25B's Forward Sale / Pre-Liquidity-Event Contracts,
 structured-safe scope (POST/accept/cancel/governing-document-review/
 settle + GET /forward-sale-contracts), 2026-10-23.
 
-M25B was formally deferred on 2026-09-18 (claude/kevo-m25b-forward-sale-
+M25B was formally deferred on 2026-09-18 (kevo-m25b-forward-sale-
 legal-research.md) over three independent obstacles: Dodd-Frank
 security-based-swap reclassification risk, IRC Section 1259 constructive-
 sale tax risk, and unverifiable per-company governing-document

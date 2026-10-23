@@ -516,7 +516,7 @@ class RofrRequest(Base):
     creation time and stays null when the window isn't known. Still
     deliberately avoids
     an auto-triggered countdown, the specific mechanism flagged as
-    patent-adjacent in claude/kevo-m25-rofr-patent-claim-analysis.md
+    patent-adjacent in kevo-m25-rofr-patent-claim-analysis.md
     (Nasdaq Private Market US 12,572,980). KEVO has no "issuer" or
     "existing shareholder" user concept yet, so this follows the same
     self-submit/admin-verify pattern already used for Evidence, KYCFact,
@@ -718,7 +718,7 @@ class TenderOfferProgram(Base):
     company already agreed to outside the platform - KEVO never sets or
     suggests these terms itself, preserving the standing no-trade-term-
     setting invariant (2026-09-09). Jurisdictional research (2026-09-20,
-    claude/kevo-m30b-tender-offer-program-research-and-audit.md) found this
+    kevo-m30b-tender-offer-program-research-and-audit.md) found this
     is fundamentally a corporate-governance matter (a resolution the company
     and its shareholders make themselves) in 5 of KEVO's 6 active
     jurisdictions - Canada is deliberately excluded (enforced in app.py, not
@@ -1203,7 +1203,7 @@ class LiquidityEventSignal(Base):
     M31 - Liquidity Event Radar (admin-entered MVP), 2026-10-22. Was
     explicitly parked since 2026-09-05 pending its own dedicated research
     pass on information sourcing, confidentiality, and market-abuse/
-    insider-information risk (claude/kevo-m31-liquidity-event-radar-
+    insider-information risk (kevo-m31-liquidity-event-radar-
     research.md) - this is that research's resulting design, confirmed
     with Eze via AskUserQuestion 2026-10-22.
 
@@ -1266,7 +1266,7 @@ class SpvPool(Base):
     M17B gap-closure item, 2026-10-22 - SPV Fractional Ownership Pools,
     back-office-administrator-only scope.
 
-    M17B's own prior research (claude/kevo-m17b-spv-critical-assessment.md,
+    M17B's own prior research (kevo-m17b-spv-critical-assessment.md,
     2026-09-12) found every real pooled-SPV platform runs one of three
     ways: (1) inside a registered broker-dealer (EquityZen Securities LLC,
     Forge Securities), (2) through a registered investment adviser under
@@ -1341,7 +1341,7 @@ class ForwardSaleContract(Base):
     M25B gap-closure item, 2026-10-23 - Forward Sale / Pre-Liquidity-Event
     Contracts, structured-safe scope.
 
-    M25B's own prior research (claude/kevo-m25b-forward-sale-legal-
+    M25B's own prior research (kevo-m25b-forward-sale-legal-
     research.md, 2026-09-18) found three independent obstacles to the
     originally-scoped "lock in a price today, settle later" contract, not
     just a design gap:
