@@ -1548,6 +1548,12 @@ class WalletDepositRequest(BaseModel):
     idempotency_key: str
 
 
+class WalletDepositRealRequest(BaseModel):
+    bank_account_id: int
+    amount: float
+    idempotency_key: str
+
+
 class WalletWithdrawRequest(BaseModel):
     amount: float
     currency: str = "USD"
@@ -1638,6 +1644,42 @@ def deposit_to_my_wallet(
                          detail=f"amount={request.amount} currency={request.currency}")
     else:
         log_audit_event(db, current_user.id, "wallet_deposit_failed", target_type="wallet", target_id=current_user.id,
+                         detail=result.get("failureReason") or "unknown failure")
+        raise HTTPException(status_code=400, detail=result.get("failureReason") or "Deposit failed")
+
+    return result
+
+
+@app.post("/me/funds/deposit/real")
+def deposit_real_to_my_wallet(
+    request: WalletDepositRealRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(require_verified_user)
+):
+    """
+    Real ACH deposit via Stripe, against one of the user's own verified
+    bank accounts (added through /me/bank-accounts/connect-session +
+    connect-finalize). Unlike the demo path, this does NOT settle
+    instantly - it comes back PENDING and only becomes COMPLETED once
+    Stripe's webhook confirms the ACH debit actually cleared, a few
+    business days later.
+    """
+    log_audit_event(db, current_user.id, "real_wallet_deposit_initiated", target_type="wallet", target_id=current_user.id,
+                     detail=f"amount={request.amount} bank_account_id={request.bank_account_id}")
+    try:
+        result = wallet_client.deposit_real(
+            current_user.id, request.bank_account_id, request.amount, request.idempotency_key
+        )
+    except RuntimeError as e:
+        log_audit_event(db, current_user.id, "real_wallet_deposit_failed", target_type="wallet", target_id=current_user.id,
+                         detail=str(e))
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+
+    if result.get("status") in ("COMPLETED", "PENDING"):
+        log_audit_event(db, current_user.id, "real_wallet_deposit_submitted", target_type="wallet", target_id=current_user.id,
+                         detail=f"amount={request.amount} bank_account_id={request.bank_account_id} status={result.get('status')}")
+    else:
+        log_audit_event(db, current_user.id, "real_wallet_deposit_failed", target_type="wallet", target_id=current_user.id,
                          detail=result.get("failureReason") or "unknown failure")
         raise HTTPException(status_code=400, detail=result.get("failureReason") or "Deposit failed")
 

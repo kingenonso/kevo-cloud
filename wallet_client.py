@@ -91,6 +91,24 @@ def withdraw(kevo_user_id: int, amount: float, currency: str, bank_account_id: i
     return response.json()
 
 
+def deposit_real(kevo_user_id: int, bank_account_id: int, amount: float, idempotency_key: str) -> dict:
+    """Initiates a real ACH deposit via Stripe against one of the user's own
+    verified bank accounts (spec Section 14's real path) - the real counterpart
+    to deposit() above. This does NOT settle instantly: the deposit lands as
+    PENDING and only becomes COMPLETED once Stripe's webhook confirms the ACH
+    debit actually cleared, a few business days later."""
+    payload = {
+        "bankAccountId": bank_account_id,
+        "amount": amount,
+        "idempotencyKey": idempotency_key,
+    }
+    response = _check(requests.post(
+        f"{_base_url()}/internal/wallets/{kevo_user_id}/deposits/real",
+        json=payload, headers=_headers(), timeout=15
+    ))
+    return response.json()
+
+
 def withdraw_real(kevo_user_id: int, amount: float, currency: str, idempotency_key: str) -> dict:
     """Withdraws real money via Stripe Connect (spec Section 14's real path) - pays out to
     whatever bank account the user added directly with Stripe during their own Connect
