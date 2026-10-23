@@ -8,6 +8,7 @@ import {
   ShieldCheck,
   Zap,
   Settings,
+  Store,
   type LucideIcon,
 } from "lucide-react"
 
@@ -39,6 +40,17 @@ export const pinnedTopNav: NavLink[] = [
 export const groupedNav: NavGroup[] = [
   {
     type: "group",
+    key: "marketplace",
+    label: "Marketplace",
+    icon: Store,
+    items: [
+      { label: "Browse", href: "/browse" },
+      { label: "Evidence", href: "/evidence" },
+      { label: "Cost Calculator", href: "/cost-calculator" },
+    ],
+  },
+  {
+    type: "group",
     key: "capitalMarkets",
     label: "Capital Markets",
     icon: TrendingUp,
@@ -47,6 +59,9 @@ export const groupedNav: NavGroup[] = [
       { label: "FX Settlement", href: "/fx-settlement" },
       { label: "Option Funding", href: "/option-funding" },
       { label: "Tender Offers", href: "/tender-offers" },
+      { label: "SPV Pools", href: "/spv-pools" },
+      { label: "Forward Sale Contracts", href: "/forward-sale-contracts" },
+      { label: "Seller Financing", href: "/seller-financing" },
     ],
   },
   {
@@ -58,6 +73,7 @@ export const groupedNav: NavGroup[] = [
       { label: "Compliance Ledger", href: "/compliance-ledger" },
       { label: "KYC & AML", href: "/kyc" },
       { label: "ROFR", href: "/rofr" },
+      { label: "Eligibility", href: "/eligibility" },
       { label: "Withdrawal Review", href: "/admin/withdrawal-review" },
     ],
   },
@@ -70,6 +86,9 @@ export const groupedNav: NavGroup[] = [
       { label: "Deal Alerts", href: "/deal-alerts" },
       { label: "Risk Radar", href: "/risk-radar" },
       { label: "Liquidity Roadmap", href: "/liquidity-roadmap" },
+      { label: "Market Intelligence", href: "/market-intelligence" },
+      { label: "Liquidity Event Radar", href: "/liquidity-event-radar" },
+      { label: "Speed Discount", href: "/speed-discount" },
     ],
   },
 ]
