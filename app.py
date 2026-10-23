@@ -34,6 +34,7 @@ from models import Message
 from models import LiquidityCommitment
 from models import LiquidityEventSignal
 from models import SpeedDiscountOffer
+from models import SpvPool, SpvPoolCommitment
 import escrow_client
 import wallet_client
 import email_client
@@ -9613,3 +9614,270 @@ def get_time_to_sale_stats(
         "average_days_to_sale": round(statistics.mean(days_to_sale), 1),
         "median_days_to_sale": round(statistics.median(days_to_sale), 1),
     }
+
+
+# ---------------------------------------------------------------------------
+# M17B - SPV Fractional Ownership Pools, back-office-administrator-only
+# scope, 2026-10-22.
+#
+# M17B's own prior research (claude/kevo-m17b-spv-critical-assessment.md,
+# 2026-09-12) found every real pooled-SPV platform runs one of three ways:
+# (1) inside a registered broker-dealer, (2) through a registered
+# investment adviser under narrow no-transaction-fee conditions, or (3) as
+# a pure back-office administrator with no sponsor role at all - the
+# customer bears full regulatory responsibility as their own sponsor
+# (Sydecar, Carta, Allocations). KEVO has no broker-dealer or investment-
+# adviser registration, so only (3) is available. Confirmed with Eze via
+# AskUserQuestion, 2026-10-22: build (3).
+#
+# KEVO is never the sponsor/GP/manager of a pool - sponsor_name names
+# whoever actually is, legal_disclaimer_acknowledged must be explicitly
+# true to create one, and KEVO charges no fee of any kind tied to a pool.
+# minimum_check_size/target_total_amount are organizer-stated, never
+# KEVO-computed - the same agreed_price invariant (M10/M11) carried
+# through every admin/party-attested record in KEVO.
+# ---------------------------------------------------------------------------
+
+SPV_POOL_DISCLAIMER = (
+    "KEVO is not the sponsor, general partner, or manager of this pool "
+    "and does not form or operate it. The named sponsor is solely "
+    "responsible for legally forming and operating this vehicle, "
+    "securities-law compliance, and all investor protections. KEVO "
+    "provides record-keeping only, charges no fee of any kind tied to "
+    "this pool, and does not verify the sponsor's actual legal capacity "
+    "or registration."
+)
+
+
+def _serialize_spv_pool(p: SpvPool):
+    return {
+        "id": p.id,
+        "organizer_id": p.organizer_id,
+        "company": p.company,
+        "asset_type": p.asset_type,
+        "target_listing_id": p.target_listing_id,
+        "sponsor_name": p.sponsor_name,
+        "sponsor_is_platform_user": p.sponsor_is_platform_user,
+        "sponsor_contact_reference": p.sponsor_contact_reference,
+        "minimum_check_size": p.minimum_check_size,
+        "target_total_amount": p.target_total_amount,
+        "legal_disclaimer_acknowledged": p.legal_disclaimer_acknowledged,
+        "status": p.status,
+        "notes": p.notes,
+        "created_at": p.created_at,
+        "closed_at": p.closed_at,
+        "disclaimer": SPV_POOL_DISCLAIMER,
+    }
+
+
+def _serialize_spv_pool_commitment(c: SpvPoolCommitment):
+    return {
+        "id": c.id,
+        "pool_id": c.pool_id,
+        "participant_id": c.participant_id,
+        "committed_amount": c.committed_amount,
+        "status": c.status,
+        "created_at": c.created_at,
+        "withdrawn_at": c.withdrawn_at,
+        "disclaimer": (
+            "This is a non-binding statement of intent, not an executed "
+            "subscription agreement. " + SPV_POOL_DISCLAIMER
+        ),
+    }
+
+
+@app.post("/spv-pools")
+def create_spv_pool(
+    company: str,
+    asset_type: str,
+    sponsor_name: str,
+    minimum_check_size: float,
+    legal_disclaimer_acknowledged: bool,
+    target_listing_id: int | None = None,
+    sponsor_is_platform_user: bool = False,
+    sponsor_contact_reference: str | None = None,
+    target_total_amount: float | None = None,
+    notes: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if not sponsor_name.strip():
+        raise HTTPException(status_code=400, detail="sponsor_name is required - name whoever is actually legally sponsoring this pool")
+    if not legal_disclaimer_acknowledged:
+        raise HTTPException(
+            status_code=400,
+            detail="legal_disclaimer_acknowledged must be true: KEVO is not the sponsor of this pool, and the organizer must explicitly acknowledge that before creating one"
+        )
+    if minimum_check_size <= 0:
+        raise HTTPException(status_code=400, detail="minimum_check_size must be greater than zero")
+    if target_total_amount is not None and target_total_amount < minimum_check_size:
+        raise HTTPException(status_code=400, detail="target_total_amount cannot be less than minimum_check_size")
+    if target_listing_id is not None:
+        listing = db.query(ListingModel).filter(ListingModel.id == target_listing_id).first()
+        if listing is None:
+            raise HTTPException(status_code=404, detail="target_listing_id does not refer to an existing listing")
+    pool = SpvPool(
+        organizer_id=current_user.id,
+        company=company,
+        asset_type=asset_type,
+        target_listing_id=target_listing_id,
+        sponsor_name=sponsor_name,
+        sponsor_is_platform_user=sponsor_is_platform_user,
+        sponsor_contact_reference=sponsor_contact_reference,
+        minimum_check_size=minimum_check_size,
+        target_total_amount=target_total_amount,
+        legal_disclaimer_acknowledged=legal_disclaimer_acknowledged,
+        status="forming",
+        notes=notes,
+        created_at=datetime.utcnow(),
+    )
+    db.add(pool)
+    db.commit()
+    db.refresh(pool)
+    return _serialize_spv_pool(pool)
+
+
+@app.get("/spv-pools")
+def get_spv_pools(
+    company: str | None = None,
+    asset_type: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Open to any authenticated user, same as GET /listings - browsing a
+    roster of organizer-created pools is not new matching/coordination
+    logic, it's the same visibility BuyerInterest/Listing already have.
+    """
+    query = db.query(SpvPool)
+    if company is not None:
+        query = query.filter(SpvPool.company == company)
+    if asset_type is not None:
+        query = query.filter(SpvPool.asset_type == asset_type)
+    if status is not None:
+        query = query.filter(SpvPool.status == status)
+    return [_serialize_spv_pool(p) for p in query.all()]
+
+
+@app.get("/spv-pools/{pool_id}")
+def get_spv_pool(
+    pool_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    pool = db.query(SpvPool).filter(SpvPool.id == pool_id).first()
+    if pool is None:
+        raise HTTPException(status_code=404, detail="SPV pool not found")
+    return _serialize_spv_pool(pool)
+
+
+@app.put("/spv-pools/{pool_id}/close")
+def close_spv_pool(
+    pool_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    pool = db.query(SpvPool).filter(SpvPool.id == pool_id).first()
+    if pool is None:
+        raise HTTPException(status_code=404, detail="SPV pool not found")
+    if pool.organizer_id != current_user.id and current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only the organizer or an admin can close this pool")
+    if pool.status != "forming":
+        raise HTTPException(status_code=400, detail="Only a forming pool can be closed")
+    pool.status = "closed"
+    pool.closed_at = datetime.utcnow()
+    db.commit()
+    db.refresh(pool)
+    return _serialize_spv_pool(pool)
+
+
+@app.put("/spv-pools/{pool_id}/cancel")
+def cancel_spv_pool(
+    pool_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    pool = db.query(SpvPool).filter(SpvPool.id == pool_id).first()
+    if pool is None:
+        raise HTTPException(status_code=404, detail="SPV pool not found")
+    if pool.organizer_id != current_user.id and current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only the organizer or an admin can cancel this pool")
+    if pool.status != "forming":
+        raise HTTPException(status_code=400, detail="Only a forming pool can be cancelled")
+    pool.status = "cancelled"
+    pool.closed_at = datetime.utcnow()
+    db.commit()
+    db.refresh(pool)
+    return _serialize_spv_pool(pool)
+
+
+@app.post("/spv-pools/{pool_id}/commitments")
+def create_spv_pool_commitment(
+    pool_id: int,
+    committed_amount: float,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    pool = db.query(SpvPool).filter(SpvPool.id == pool_id).first()
+    if pool is None:
+        raise HTTPException(status_code=404, detail="SPV pool not found")
+    if pool.status != "forming":
+        raise HTTPException(status_code=400, detail="This pool is no longer accepting commitments")
+    if committed_amount < float(pool.minimum_check_size):
+        raise HTTPException(
+            status_code=400,
+            detail=f"committed_amount must be at least this pool's minimum check size ({pool.minimum_check_size})"
+        )
+    commitment = SpvPoolCommitment(
+        pool_id=pool_id,
+        participant_id=current_user.id,
+        committed_amount=committed_amount,
+        status="pending",
+        created_at=datetime.utcnow(),
+    )
+    db.add(commitment)
+    db.commit()
+    db.refresh(commitment)
+    return _serialize_spv_pool_commitment(commitment)
+
+
+@app.get("/spv-pools/{pool_id}/commitments")
+def get_spv_pool_commitments(
+    pool_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    The organizer and an admin see every commitment on their own pool
+    (they need the full roster); anyone else sees only their own
+    commitment to this pool - the same owner-or-admin scoping used
+    throughout KEVO (GET /buyer-interests, GET /loan-requests, etc.).
+    """
+    pool = db.query(SpvPool).filter(SpvPool.id == pool_id).first()
+    if pool is None:
+        raise HTTPException(status_code=404, detail="SPV pool not found")
+    query = db.query(SpvPoolCommitment).filter(SpvPoolCommitment.pool_id == pool_id)
+    if pool.organizer_id != current_user.id and current_user.account_type != "admin":
+        query = query.filter(SpvPoolCommitment.participant_id == current_user.id)
+    return [_serialize_spv_pool_commitment(c) for c in query.all()]
+
+
+@app.put("/spv-pool-commitments/{commitment_id}/withdraw")
+def withdraw_spv_pool_commitment(
+    commitment_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    commitment = db.query(SpvPoolCommitment).filter(SpvPoolCommitment.id == commitment_id).first()
+    if commitment is None:
+        raise HTTPException(status_code=404, detail="SPV pool commitment not found")
+    if commitment.participant_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only withdraw your own commitment")
+    if commitment.status == "withdrawn":
+        raise HTTPException(status_code=400, detail="This commitment is already withdrawn")
+    commitment.status = "withdrawn"
+    commitment.withdrawn_at = datetime.utcnow()
+    db.commit()
+    db.refresh(commitment)
+    return _serialize_spv_pool_commitment(commitment)

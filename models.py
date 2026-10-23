@@ -1259,3 +1259,78 @@ class LiquidityEventSignal(Base):
     retraction_notes = Column(String(1000), nullable=True)
     created_by_admin_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, nullable=False)
+
+
+class SpvPool(Base):
+    """
+    M17B gap-closure item, 2026-10-22 - SPV Fractional Ownership Pools,
+    back-office-administrator-only scope.
+
+    M17B's own prior research (claude/kevo-m17b-spv-critical-assessment.md,
+    2026-09-12) found every real pooled-SPV platform runs one of three
+    ways: (1) inside a registered broker-dealer (EquityZen Securities LLC,
+    Forge Securities), (2) through a registered investment adviser under
+    narrow no-transaction-fee conditions (AngelList, resting on a 2013 SEC
+    no-action letter), or (3) as a pure back-office administrator with no
+    sponsor role at all (Sydecar, Carta, Allocations) - the customer bears
+    full regulatory responsibility as their own sponsor. KEVO has no
+    broker-dealer or investment-adviser registration, so (1) and (2) are
+    not available; (3) is. Confirmed with Eze via AskUserQuestion,
+    2026-10-22: build (3), not (1)/(2), and not a full re-defer.
+
+    KEVO is never this pool's legal sponsor, general partner, or manager.
+    sponsor_name names whoever actually is - the organizer's own entity,
+    or a named third-party SPV-formation service - and
+    legal_disclaimer_acknowledged must be explicitly set true by the
+    organizer before a pool can be created at all. KEVO performs no
+    investment decision-making, charges no fee of any kind tied to this
+    pool (the AngelList no-action letter's central condition, and the
+    simplest way to stay outside it rather than attempt to satisfy it),
+    and does not verify that the named sponsor has actually formed or is
+    capable of forming the vehicle - that remains the organizer's and
+    sponsor's own legal responsibility, exactly like every other
+    admin/party-attested record in KEVO (RofrRequest, SettlementRecord,
+    SellerFinancingCollateral's "not_reviewed" default).
+
+    minimum_check_size and target_total_amount are organizer-stated,
+    never KEVO-computed - the same "KEVO never sets or suggests a
+    trade/deal term" invariant as agreed_price (M10/M11) and the ROFR/
+    discount offers above.
+    """
+    __tablename__ = "spv_pools"
+
+    id = Column(Integer, primary_key=True)
+    organizer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    company = Column(String(255), nullable=False)
+    asset_type = Column(String(100), nullable=False)
+    target_listing_id = Column(Integer, ForeignKey("listings.id"), nullable=True)
+    sponsor_name = Column(String(255), nullable=False)
+    sponsor_is_platform_user = Column(Boolean, nullable=False, default=False)
+    sponsor_contact_reference = Column(String(500), nullable=True)
+    minimum_check_size = Column(Numeric(15, 2), nullable=False)
+    target_total_amount = Column(Numeric(15, 2), nullable=True)
+    legal_disclaimer_acknowledged = Column(Boolean, nullable=False, default=False)
+    status = Column(String(50), nullable=False, default="forming")
+    notes = Column(String(1000), nullable=True)
+    created_at = Column(DateTime, nullable=False)
+    closed_at = Column(DateTime, nullable=True)
+
+
+class SpvPoolCommitment(Base):
+    """
+    A participant's stated intent to put a specific amount into a given
+    SpvPool. Pure data capture, same discipline as LiquidityCommitment
+    and BuyerInterest - non-binding, never auto-matched, never fed into
+    any coordination or allocation logic. The organizer and the named
+    sponsor are the ones who turn these into an actual legal commitment
+    outside KEVO; KEVO just keeps the roster.
+    """
+    __tablename__ = "spv_pool_commitments"
+
+    id = Column(Integer, primary_key=True)
+    pool_id = Column(Integer, ForeignKey("spv_pools.id"), nullable=False)
+    participant_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    committed_amount = Column(Numeric(15, 2), nullable=False)
+    status = Column(String(50), nullable=False, default="pending")
+    created_at = Column(DateTime, nullable=False)
+    withdrawn_at = Column(DateTime, nullable=True)
