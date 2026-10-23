@@ -91,6 +91,23 @@ def withdraw(kevo_user_id: int, amount: float, currency: str, bank_account_id: i
     return response.json()
 
 
+def withdraw_real(kevo_user_id: int, amount: float, currency: str, idempotency_key: str) -> dict:
+    """Withdraws real money via Stripe Connect (spec Section 14's real path) - pays out to
+    whatever bank account the user added directly with Stripe during their own Connect
+    onboarding, not to one of the BankAccount rows the demo withdraw() uses. Requires that
+    onboarding to already be complete (see get_connect_status)."""
+    payload = {
+        "amount": amount,
+        "currency": currency,
+        "idempotencyKey": idempotency_key,
+    }
+    response = _check(requests.post(
+        f"{_base_url()}/internal/wallets/{kevo_user_id}/withdrawals/real",
+        json=payload, headers=_headers(), timeout=15
+    ))
+    return response.json()
+
+
 def add_bank_account(kevo_user_id: int, account_holder_name: str, bank_name: str, account_number: str) -> dict:
     """Adds a bank account to a user's wallet. Only a last-four stand-in and a demo provider token are ever stored - the real account number is discarded after this call."""
     payload = {

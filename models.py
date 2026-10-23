@@ -554,6 +554,30 @@ class PasswordResetToken(Base):
     used_at = Column(DateTime, nullable=True)
 
 
+class RealWithdrawalConfirmation(Base):
+    """
+    Step-up authentication for large REAL (Stripe Connect) withdrawals -
+    the real counterpart to WithdrawalConfirmation. Kept as its own table
+    rather than reusing WithdrawalConfirmation because the real path has
+    no bank_account_id (it pays out to whatever bank account the user set
+    up directly with Stripe, not one of KEVO's own BankAccount rows), and
+    that column is NOT NULL on the existing table. Same mirrors-
+    PasswordResetToken pattern: only a SHA-256 hash of the token is ever
+    stored, single-use, time-limited.
+    """
+    __tablename__ = "real_withdrawal_confirmations"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    amount = Column(Numeric(15, 2), nullable=False)
+    currency = Column(String(3), nullable=False)
+    idempotency_key = Column(String(100), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+
+
 class WithdrawalConfirmation(Base):
     """
     M32 continuation - step-up authentication for large withdrawals

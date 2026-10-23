@@ -25,7 +25,7 @@ import calendar
 from database import SessionLocal
 from models import Listing as ListingModel
 from models import User as UserModel
-from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection, TenderOfferSettlement, DealAlert, PasswordResetToken, WithdrawalConfirmation, AuditLogEntry, SellerFinancingAgreement, SellerFinancingPayment, SellerFinancingReserve, SellerFinancingCollateral
+from models import OwnershipRecord, Transaction, BuyerInterest, InvestorEligibility, ComplianceRule, TransferabilityRule, TransferabilityFact, TransferabilityAssessment, PositionPassport, Evidence, PositionEvent, Offering, OfferingFact, OfferingExemptionRule, OfferingExemptionAssessment, LiquidityPathStep, KYCFact, RofrRequest, SettlementRecord, LoanRequest, OptionFundingReferral, ComplianceDecisionLedger, TenderOfferProgram, TenderOfferElection, TenderOfferSettlement, DealAlert, PasswordResetToken, WithdrawalConfirmation, RealWithdrawalConfirmation, AuditLogEntry, SellerFinancingAgreement, SellerFinancingPayment, SellerFinancingReserve, SellerFinancingCollateral
 from models import Transaction
 from models import DueDiligenceChecklistItem
 from models import SecondaryAuctionBid
@@ -1555,6 +1555,12 @@ class WalletWithdrawRequest(BaseModel):
     idempotency_key: str
 
 
+class WalletWithdrawRealRequest(BaseModel):
+    amount: float
+    currency: str = "USD"
+    idempotency_key: str
+
+
 class ConfirmWithdrawalRequest(BaseModel):
     token: str
 
@@ -1750,6 +1756,128 @@ def confirm_my_withdrawal(
         db.commit()
     else:
         log_audit_event(db, current_user.id, "wallet_withdrawal_failed", target_type="wallet", target_id=current_user.id,
+                         detail=result.get("failureReason") or "unknown failure")
+        db.commit()
+        raise HTTPException(status_code=400, detail=result.get("failureReason") or "Withdrawal failed")
+
+    return result
+
+
+@app.post("/me/funds/withdraw/real")
+def withdraw_real_from_my_wallet(
+    request: WalletWithdrawRealRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(require_verified_user)
+):
+    """
+    Real-money withdrawal via Stripe Connect - pays out to whatever bank
+    account the user set up directly with Stripe during their own Connect
+    onboarding (see /me/connect/account and /me/connect/onboarding-link),
+    not to one of their BankAccount rows. Same step-up confirmation
+    threshold as the demo path (spec Section 15) - this is real money
+    leaving for good, so it gets the same protection, never less.
+    """
+    log_audit_event(db, current_user.id, "real_wallet_withdrawal_requested", target_type="wallet", target_id=current_user.id,
+                     detail=f"amount={request.amount} currency={request.currency}")
+
+    if request.amount >= STEP_UP_WITHDRAWAL_THRESHOLD:
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        now = datetime.utcnow()
+
+        confirmation = RealWithdrawalConfirmation(
+            user_id=current_user.id,
+            token_hash=token_hash,
+            amount=request.amount,
+            currency=request.currency,
+            idempotency_key=request.idempotency_key,
+            created_at=now,
+            expires_at=now + timedelta(minutes=15),
+            used_at=None
+        )
+        db.add(confirmation)
+        log_audit_event(db, current_user.id, "real_wallet_withdrawal_confirmation_sent", target_type="wallet", target_id=current_user.id,
+                         detail=f"amount={request.amount} currency={request.currency}")
+        db.commit()
+
+        confirm_link = f"https://kevo.example/confirm-withdrawal?token={raw_token}&real=1"
+        try:
+            email_client.send_email(
+                current_user.email,
+                "Confirm your KEVO withdrawal",
+                f"""You requested a real withdrawal of {request.amount} {request.currency} from your KEVO wallet to your connected Stripe payout account.
+
+Click here to confirm: {confirm_link}
+
+This link expires in 15 minutes and can only be used once. If you didn't request this, please secure your account immediately and contact support."""
+            )
+        except RuntimeError as e:
+            log_audit_event(db, current_user.id, "real_wallet_withdrawal_confirmation_email_failed", target_type="wallet", target_id=current_user.id,
+                             detail=str(e))
+            raise HTTPException(status_code=502, detail=f"Could not send confirmation email: {e}")
+
+        return {
+            "status": "CONFIRMATION_REQUIRED",
+            "message": "This withdrawal is above the confirmation threshold. Check your email to confirm it.",
+            "expires_in_minutes": 15
+        }
+
+    try:
+        result = wallet_client.withdraw_real(current_user.id, request.amount, request.currency, request.idempotency_key)
+    except RuntimeError as e:
+        log_audit_event(db, current_user.id, "real_wallet_withdrawal_failed", target_type="wallet", target_id=current_user.id,
+                         detail=str(e))
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+
+    if result.get("status") in ("COMPLETED", "PENDING"):
+        log_audit_event(db, current_user.id, "real_wallet_withdrawal_submitted", target_type="wallet", target_id=current_user.id,
+                         detail=f"amount={request.amount} currency={request.currency} status={result.get('status')}")
+    else:
+        log_audit_event(db, current_user.id, "real_wallet_withdrawal_failed", target_type="wallet", target_id=current_user.id,
+                         detail=result.get("failureReason") or "unknown failure")
+        raise HTTPException(status_code=400, detail=result.get("failureReason") or "Withdrawal failed")
+
+    return result
+
+
+@app.post("/me/funds/withdraw/real/confirm")
+def confirm_my_real_withdrawal(
+    request: ConfirmWithdrawalRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(require_verified_user)
+):
+    token_hash = hashlib.sha256(request.token.encode()).hexdigest()
+    confirmation = db.query(RealWithdrawalConfirmation).filter(RealWithdrawalConfirmation.token_hash == token_hash).first()
+
+    if confirmation is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired confirmation token")
+
+    if confirmation.used_at is not None:
+        raise HTTPException(status_code=400, detail="Invalid or expired confirmation token")
+
+    if confirmation.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Invalid or expired confirmation token")
+
+    if confirmation.user_id != current_user.id:
+        raise HTTPException(status_code=400, detail="Invalid or expired confirmation token")
+
+    try:
+        result = wallet_client.withdraw_real(
+            current_user.id, float(confirmation.amount), confirmation.currency, confirmation.idempotency_key
+        )
+    except RuntimeError as e:
+        log_audit_event(db, current_user.id, "real_wallet_withdrawal_failed", target_type="wallet", target_id=current_user.id,
+                         detail=str(e))
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+
+    confirmation.used_at = datetime.utcnow()
+
+    if result.get("status") in ("COMPLETED", "PENDING"):
+        log_audit_event(db, current_user.id, "real_wallet_withdrawal_submitted", target_type="wallet", target_id=current_user.id,
+                         detail=f"amount={confirmation.amount} currency={confirmation.currency} status={result.get('status')} (confirmed)")
+        db.commit()
+    else:
+        log_audit_event(db, current_user.id, "real_wallet_withdrawal_failed", target_type="wallet", target_id=current_user.id,
                          detail=result.get("failureReason") or "unknown failure")
         db.commit()
         raise HTTPException(status_code=400, detail=result.get("failureReason") or "Withdrawal failed")
