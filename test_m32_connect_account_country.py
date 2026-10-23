@@ -122,3 +122,16 @@ def test_create_connect_account_rejects_unsupported_country(client, db_session):
 def test_create_connect_account_unauthenticated_401(client, db_session):
     resp = client.post("/me/connect/account", json={"country": "US"})
     assert resp.status_code == 401
+
+
+def test_supported_countries_endpoint_matches_validation_list(client, db_session):
+    from app import STRIPE_CONNECT_SUPPORTED_COUNTRIES
+
+    resp = client.get("/me/connect/supported-countries")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert set(data["countries"]) == STRIPE_CONNECT_SUPPORTED_COUNTRIES
+    assert "NG" in data["countries"]
+    assert "US" in data["countries"]
+    assert data["countries"] == sorted(data["countries"])

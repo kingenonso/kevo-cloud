@@ -2024,6 +2024,14 @@ def finalize_bank_connection(
     return result
 
 
+@app.get("/me/connect/supported-countries")
+def list_connect_supported_countries():
+    """Returns the exact list /me/connect/account validates against, so the
+    frontend's country picker can never drift out of sync with the backend's
+    own Stripe Connect allow-list."""
+    return {"countries": sorted(STRIPE_CONNECT_SUPPORTED_COUNTRIES)}
+
+
 @app.post("/me/connect/account")
 def create_my_connect_account(
     request: ConnectAccountRequest,
