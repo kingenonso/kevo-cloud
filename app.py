@@ -1569,6 +1569,29 @@ class ConnectFinalizeRequest(BaseModel):
     session_id: str
 
 
+# Countries where a KEVO user can be onboarded as a Stripe Connect
+# connected account to receive real payouts (spec Section 14/29 real
+# withdrawal path). Pulled from Stripe's own "generally available"
+# Connect country list (docs.stripe.com/connect, checked 2026-10-23) -
+# this is NOT the same as which countries Stripe accepts payments FROM.
+# Nigeria (NG) is included - it is GA for Connect, not preview.
+STRIPE_CONNECT_SUPPORTED_COUNTRIES = frozenset({
+    "AE", "AG", "AL", "AM", "AR", "AT", "AU", "BA", "BE", "BG", "BH", "BJ",
+    "BN", "BO", "BS", "BW", "CA", "CH", "CI", "CL", "CO", "CR", "CY", "CZ",
+    "DE", "DK", "DO", "EC", "EE", "EG", "ES", "ET", "FI", "FR", "GB", "GH",
+    "GM", "GR", "GT", "GY", "HK", "HU", "IE", "IL", "IS", "IT", "JM", "JO",
+    "JP", "KE", "KH", "KR", "KW", "LC", "LK", "LT", "LU", "LV", "MA", "MC",
+    "MD", "MG", "MK", "MN", "MO", "MT", "MU", "MX", "NA", "NG", "NL", "NO",
+    "NZ", "OM", "PA", "PE", "PH", "PK", "PL", "PT", "PY", "QA", "RO", "RS",
+    "RW", "SA", "SE", "SG", "SI", "SK", "SN", "SV", "TH", "TN", "TR", "TT",
+    "TW", "TZ", "US", "UY", "UZ", "VN", "ZA",
+})
+
+
+class ConnectAccountRequest(BaseModel):
+    country: str
+
+
 class RejectWithdrawalReasonRequest(BaseModel):
     reason: str
 
@@ -1833,16 +1856,26 @@ def finalize_bank_connection(
 
 @app.post("/me/connect/account")
 def create_my_connect_account(
+    request: ConnectAccountRequest,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(require_verified_user)
 ):
-    # TODO: country is hardcoded to "US" as a placeholder to prove the
-    # mechanism works in Stripe test mode. Mapping a real user's actual
-    # jurisdiction (current_user.jurisdiction) to a Stripe-supported
-    # connected-account country is a separate, not-yet-made decision.
-    log_audit_event(db, current_user.id, "connect_account_initiated", target_type="wallet", target_id=current_user.id)
+    # The country is supplied explicitly by the user at the point of
+    # onboarding (not inferred from the free-text jurisdiction field,
+    # which was never designed to be a controlled list of ISO country
+    # codes) and checked against Stripe's own Connect-supported country
+    # list, so KEVO never sends Stripe a guessed or defaulted country for
+    # a real financial onboarding flow.
+    country = request.country.strip().upper()
+    if country not in STRIPE_CONNECT_SUPPORTED_COUNTRIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{country}' is not a country Stripe currently supports for receiving payouts.",
+        )
+    log_audit_event(db, current_user.id, "connect_account_initiated", target_type="wallet", target_id=current_user.id,
+                     detail=f"country={country}")
     try:
-        result = wallet_client.create_connect_account(current_user.id, "US", current_user.email)
+        result = wallet_client.create_connect_account(current_user.id, country, current_user.email)
     except RuntimeError as e:
         log_audit_event(db, current_user.id, "connect_account_failed", target_type="wallet", target_id=current_user.id,
                          detail=str(e))
