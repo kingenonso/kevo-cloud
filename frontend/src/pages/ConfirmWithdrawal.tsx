@@ -5,6 +5,7 @@ import { apiFetch } from "@/lib/auth"
 export function ConfirmWithdrawalPage() {
   const [searchParams] = useSearchParams()
   const token = searchParams.get("token")
+  const isReal = searchParams.get("real") === "1"
   const [status, setStatus] = useState<"loading" | "success" | "error">("loading")
   const [message, setMessage] = useState("")
 
@@ -17,11 +18,19 @@ export function ConfirmWithdrawalPage() {
 
     async function confirm() {
       try {
-        const response = await apiFetch("/me/funds/withdraw/confirm", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token }),
-        })
+        // Real (Stripe Connect) withdrawals and demo withdrawals use
+        // separate confirmation endpoints and separate confirmation-token
+        // tables - the "real=1" query param set on the emailed link (see
+        // /me/funds/withdraw/real in app.py) is what tells this page which
+        // one to call.
+        const response = await apiFetch(
+          isReal ? "/me/funds/withdraw/real/confirm" : "/me/funds/withdraw/confirm",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token }),
+          }
+        )
         const data = await response.json().catch(() => null)
         if (!response.ok) {
           setStatus("error")
@@ -37,7 +46,7 @@ export function ConfirmWithdrawalPage() {
     }
 
     confirm()
-  }, [token])
+  }, [token, isReal])
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">

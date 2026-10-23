@@ -35,6 +35,11 @@ type BankAccount = {
   createdAt: string
 }
 
+type ConnectStatus = {
+  accountCreated: boolean
+  payoutsEnabled: boolean
+}
+
 function newIdempotencyKey(): string {
   return crypto.randomUUID()
 }
@@ -62,12 +67,15 @@ export function WalletPage() {
   const [bankAccountsLoading, setBankAccountsLoading] = useState(true)
 
   const [depositOpen, setDepositOpen] = useState(false)
+  const [depositMethod, setDepositMethod] = useState<"demo" | "real">("demo")
   const [depositAmount, setDepositAmount] = useState("")
+  const [depositBankAccountId, setDepositBankAccountId] = useState<number | null>(null)
   const [depositKey, setDepositKey] = useState(newIdempotencyKey())
   const [depositSubmitting, setDepositSubmitting] = useState(false)
   const [depositError, setDepositError] = useState<string | null>(null)
 
   const [withdrawOpen, setWithdrawOpen] = useState(false)
+  const [withdrawMethod, setWithdrawMethod] = useState<"demo" | "real">("demo")
   const [withdrawAmount, setWithdrawAmount] = useState("")
   const [withdrawBankAccountId, setWithdrawBankAccountId] = useState<number | null>(null)
   const [withdrawKey, setWithdrawKey] = useState(newIdempotencyKey())
@@ -80,6 +88,15 @@ export function WalletPage() {
   const [connectError, setConnectError] = useState<string | null>(null)
 
   const [accountActionId, setAccountActionId] = useState<number | null>(null)
+
+  const [connectStatus, setConnectStatus] = useState<ConnectStatus | null>(null)
+  const [connectStatusLoading, setConnectStatusLoading] = useState(true)
+
+  const [payoutSetupOpen, setPayoutSetupOpen] = useState(false)
+  const [payoutCountries, setPayoutCountries] = useState<string[]>([])
+  const [payoutCountry, setPayoutCountry] = useState("")
+  const [payoutSetupSubmitting, setPayoutSetupSubmitting] = useState(false)
+  const [payoutSetupError, setPayoutSetupError] = useState<string | null>(null)
 
   async function loadWallet() {
     setWalletLoading(true)
@@ -110,9 +127,73 @@ export function WalletPage() {
     }
   }
 
+  async function loadConnectStatus() {
+    setConnectStatusLoading(true)
+    try {
+      const response = await apiFetch("/me/connect/status")
+      if (!response.ok) throw new Error()
+      const data = (await response.json()) as ConnectStatus
+      setConnectStatus(data)
+    } catch {
+      // silent - the payout setup card just shows "not set up yet"
+    } finally {
+      setConnectStatusLoading(false)
+    }
+  }
+
+  async function openPayoutSetup() {
+    setPayoutSetupError(null)
+    setPayoutSetupOpen(true)
+    if (payoutCountries.length === 0) {
+      try {
+        const response = await apiFetch("/me/connect/supported-countries")
+        if (!response.ok) throw new Error()
+        const data = (await response.json()) as { countries: string[] }
+        setPayoutCountries(data.countries)
+      } catch {
+        setPayoutSetupError("Could not load the list of supported countries.")
+      }
+    }
+  }
+
+  async function handleStartPayoutOnboarding() {
+    setPayoutSetupError(null)
+    if (!payoutCountry) {
+      setPayoutSetupError("Select the country your payout bank account is in.")
+      return
+    }
+    setPayoutSetupSubmitting(true)
+    try {
+      const accountResponse = await apiFetch("/me/connect/account", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ country: payoutCountry }),
+      })
+      const accountData = await accountResponse.json().catch(() => null)
+      if (!accountResponse.ok) {
+        setPayoutSetupError(accountData?.detail ?? "Could not start payout setup.")
+        return
+      }
+
+      const linkResponse = await apiFetch("/me/connect/onboarding-link", { method: "POST" })
+      const linkData = await linkResponse.json().catch(() => null)
+      if (!linkResponse.ok || !linkData?.url) {
+        setPayoutSetupError(linkData?.detail ?? "Could not start payout setup.")
+        return
+      }
+
+      window.location.href = linkData.url
+    } catch {
+      setPayoutSetupError("Could not reach the server. Please check your connection.")
+    } finally {
+      setPayoutSetupSubmitting(false)
+    }
+  }
+
   useEffect(() => {
     loadWallet()
     loadBankAccounts()
+    loadConnectStatus()
   }, [])
 
   async function handleDeposit(event: FormEvent<HTMLFormElement>) {
@@ -123,13 +204,24 @@ export function WalletPage() {
       setDepositError("Enter a valid amount.")
       return
     }
+    if (depositMethod === "real" && !depositBankAccountId) {
+      setDepositError("Select a verified bank account.")
+      return
+    }
     setDepositSubmitting(true)
     try {
-      const response = await apiFetch("/me/funds/deposit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount, currency: "USD", idempotency_key: depositKey }),
-      })
+      const response = await apiFetch(
+        depositMethod === "real" ? "/me/funds/deposit/real" : "/me/funds/deposit",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            depositMethod === "real"
+              ? { bank_account_id: depositBankAccountId, amount, idempotency_key: depositKey }
+              : { amount, currency: "USD", idempotency_key: depositKey }
+          ),
+        }
+      )
       if (!response.ok) {
         const data = await response.json().catch(() => null)
         setDepositError(data?.detail ?? "Deposit failed. Please try again.")
@@ -137,6 +229,7 @@ export function WalletPage() {
       }
       setDepositOpen(false)
       setDepositAmount("")
+      setDepositBankAccountId(null)
       setDepositKey(newIdempotencyKey())
       await loadWallet()
     } catch {
@@ -155,22 +248,33 @@ export function WalletPage() {
       setWithdrawError("Enter a valid amount.")
       return
     }
-    if (!withdrawBankAccountId) {
+    if (withdrawMethod === "demo" && !withdrawBankAccountId) {
       setWithdrawError("Select a verified bank account.")
+      return
+    }
+    if (withdrawMethod === "real" && !connectStatus?.payoutsEnabled) {
+      setWithdrawError("Finish setting up payouts with Stripe before withdrawing this way.")
       return
     }
     setWithdrawSubmitting(true)
     try {
-      const response = await apiFetch("/me/funds/withdraw", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          amount,
-          currency: "USD",
-          bank_account_id: withdrawBankAccountId,
-          idempotency_key: withdrawKey,
-        }),
-      })
+      const response = await apiFetch(
+        withdrawMethod === "real" ? "/me/funds/withdraw/real" : "/me/funds/withdraw",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            withdrawMethod === "real"
+              ? { amount, currency: "USD", idempotency_key: withdrawKey }
+              : {
+                  amount,
+                  currency: "USD",
+                  bank_account_id: withdrawBankAccountId,
+                  idempotency_key: withdrawKey,
+                }
+          ),
+        }
+      )
       const data = await response.json().catch(() => null)
       if (!response.ok) {
         setWithdrawError(data?.detail ?? "Withdrawal failed. Please try again.")
@@ -324,6 +428,28 @@ export function WalletPage() {
       </div>
 
       <div className="rounded-3xl border border-border bg-card p-8 shadow-sm">
+        <div className="mb-2 flex items-center justify-between">
+          <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            Real Payouts (Stripe Connect)
+          </p>
+          {!connectStatusLoading && !connectStatus?.payoutsEnabled && (
+            <Button variant="outline" size="sm" onClick={openPayoutSetup}>
+              {connectStatus?.accountCreated ? "Finish Setup" : "Set Up Payouts"}
+            </Button>
+          )}
+        </div>
+        <p className="text-sm text-muted-foreground">
+          {connectStatusLoading
+            ? "Checking payout setup..."
+            : connectStatus?.payoutsEnabled
+              ? "Ready - you can withdraw real money directly to your bank via Stripe."
+              : connectStatus?.accountCreated
+                ? "Payout setup was started but hasn't been completed with Stripe yet."
+                : "Set this up once to withdraw real money directly to your bank via Stripe."}
+        </p>
+      </div>
+
+      <div className="rounded-3xl border border-border bg-card p-8 shadow-sm">
         <div className="mb-6 flex items-center justify-between">
           <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
             Bank Accounts
@@ -371,12 +497,48 @@ export function WalletPage() {
         )}
       </div>
 
-      <Dialog open={depositOpen} onOpenChange={setDepositOpen}>
+      <Dialog
+        open={depositOpen}
+        onOpenChange={(open) => {
+          setDepositOpen(open)
+          if (!open) {
+            setDepositError(null)
+            setDepositMethod("demo")
+            setDepositBankAccountId(null)
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Deposit funds</DialogTitle>
           </DialogHeader>
           <form onSubmit={handleDeposit} className="space-y-4">
+            <div>
+              <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Method
+              </label>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={depositMethod === "demo" ? "default" : "outline"}
+                  className="flex-1"
+                  onClick={() => setDepositMethod("demo")}
+                >
+                  Demo
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={depositMethod === "real" ? "default" : "outline"}
+                  className="flex-1"
+                  onClick={() => setDepositMethod("real")}
+                >
+                  Real (ACH)
+                </Button>
+              </div>
+            </div>
+
             <div>
               <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Amount (USD)
@@ -390,9 +552,49 @@ export function WalletPage() {
                 required
               />
             </div>
+
+            {depositMethod === "real" && (
+              <div>
+                <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  From Bank Account
+                </label>
+                {verifiedAccounts.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    You need a verified bank account before you can make a real deposit.
+                  </p>
+                ) : (
+                  <select
+                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                    value={depositBankAccountId ?? ""}
+                    onChange={(e) => setDepositBankAccountId(Number(e.target.value))}
+                    required
+                  >
+                    <option value="" disabled>
+                      Select an account
+                    </option>
+                    {verifiedAccounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.bankName} •••• {account.lastFour}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  Real ACH deposits take a few business days to clear and will show as Pending
+                  until then.
+                </p>
+              </div>
+            )}
+
             {depositError && <p className="text-sm text-destructive">{depositError}</p>}
             <DialogFooter>
-              <Button type="submit" disabled={depositSubmitting} className="w-full">
+              <Button
+                type="submit"
+                disabled={
+                  depositSubmitting || (depositMethod === "real" && verifiedAccounts.length === 0)
+                }
+                className="w-full"
+              >
                 {depositSubmitting ? "Depositing..." : "Deposit"}
               </Button>
             </DialogFooter>
@@ -404,7 +606,11 @@ export function WalletPage() {
         open={withdrawOpen}
         onOpenChange={(open) => {
           setWithdrawOpen(open)
-          if (!open) setWithdrawNotice(null)
+          if (!open) {
+            setWithdrawNotice(null)
+            setWithdrawError(null)
+            setWithdrawMethod("demo")
+          }
         }}
       >
         <DialogContent>
@@ -415,6 +621,32 @@ export function WalletPage() {
             <p className="text-sm text-foreground">{withdrawNotice}</p>
           ) : (
             <form onSubmit={handleWithdraw} className="space-y-4">
+              <div>
+                <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Method
+                </label>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={withdrawMethod === "demo" ? "default" : "outline"}
+                    className="flex-1"
+                    onClick={() => setWithdrawMethod("demo")}
+                  >
+                    Demo
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={withdrawMethod === "real" ? "default" : "outline"}
+                    className="flex-1"
+                    onClick={() => setWithdrawMethod("real")}
+                  >
+                    Real (Stripe)
+                  </Button>
+                </div>
+              </div>
+
               <div>
                 <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   Amount (USD)
@@ -429,39 +661,56 @@ export function WalletPage() {
                 />
               </div>
 
-              <div>
-                <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Bank Account
-                </label>
-                {verifiedAccounts.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    You need a verified bank account before you can withdraw.
-                  </p>
-                ) : (
-                  <select
-                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-                    value={withdrawBankAccountId ?? ""}
-                    onChange={(e) => setWithdrawBankAccountId(Number(e.target.value))}
-                    required
-                  >
-                    <option value="" disabled>
-                      Select an account
-                    </option>
-                    {verifiedAccounts.map((account) => (
-                      <option key={account.id} value={account.id}>
-                        {account.bankName} •••• {account.lastFour}
+              {withdrawMethod === "demo" ? (
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Bank Account
+                  </label>
+                  {verifiedAccounts.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      You need a verified bank account before you can withdraw.
+                    </p>
+                  ) : (
+                    <select
+                      className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                      value={withdrawBankAccountId ?? ""}
+                      onChange={(e) => setWithdrawBankAccountId(Number(e.target.value))}
+                      required
+                    >
+                      <option value="" disabled>
+                        Select an account
                       </option>
-                    ))}
-                  </select>
-                )}
-              </div>
+                      {verifiedAccounts.map((account) => (
+                        <option key={account.id} value={account.id}>
+                          {account.bankName} •••• {account.lastFour}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              ) : connectStatus?.payoutsEnabled ? (
+                <p className="text-sm text-muted-foreground">
+                  This will pay out to the bank account you connected with Stripe during payout
+                  setup. Amounts at or above {formatMoney(1000, currency)} require an emailed
+                  confirmation before they're sent.
+                </p>
+              ) : (
+                <p className="text-sm text-destructive">
+                  Finish setting up payouts with Stripe (see the Real Payouts card above) before
+                  withdrawing this way.
+                </p>
+              )}
 
               {withdrawError && <p className="text-sm text-destructive">{withdrawError}</p>}
 
               <DialogFooter>
                 <Button
                   type="submit"
-                  disabled={withdrawSubmitting || verifiedAccounts.length === 0}
+                  disabled={
+                    withdrawSubmitting ||
+                    (withdrawMethod === "demo" && verifiedAccounts.length === 0) ||
+                    (withdrawMethod === "real" && !connectStatus?.payoutsEnabled)
+                  }
                   className="w-full"
                 >
                   {withdrawSubmitting ? "Submitting..." : "Withdraw"}
@@ -491,6 +740,55 @@ export function WalletPage() {
               onClick={handleConnectBank}
             >
               {connectSubmitting ? "Connecting..." : "Connect with Stripe"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={payoutSetupOpen}
+        onOpenChange={(open) => {
+          setPayoutSetupOpen(open)
+          if (!open) setPayoutSetupError(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Set up real payouts</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              You'll be taken to a secure Stripe window to verify your identity and add the bank
+              account you want real withdrawals sent to. This is separate from the bank account
+              you connect for deposits above.
+            </p>
+            <div>
+              <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Country
+              </label>
+              <select
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                value={payoutCountry}
+                onChange={(e) => setPayoutCountry(e.target.value)}
+              >
+                <option value="" disabled>
+                  {payoutCountries.length === 0 ? "Loading..." : "Select a country"}
+                </option>
+                {payoutCountries.map((code) => (
+                  <option key={code} value={code}>
+                    {code}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {payoutSetupError && <p className="text-sm text-destructive">{payoutSetupError}</p>}
+            <Button
+              type="button"
+              disabled={payoutSetupSubmitting || !payoutCountry}
+              className="w-full"
+              onClick={handleStartPayoutOnboarding}
+            >
+              {payoutSetupSubmitting ? "Starting..." : "Continue with Stripe"}
             </Button>
           </div>
         </DialogContent>
