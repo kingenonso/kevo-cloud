@@ -1334,3 +1334,70 @@ class SpvPoolCommitment(Base):
     status = Column(String(50), nullable=False, default="pending")
     created_at = Column(DateTime, nullable=False)
     withdrawn_at = Column(DateTime, nullable=True)
+
+
+class ForwardSaleContract(Base):
+    """
+    M25B gap-closure item, 2026-10-23 - Forward Sale / Pre-Liquidity-Event
+    Contracts, structured-safe scope.
+
+    M25B's own prior research (claude/kevo-m25b-forward-sale-legal-
+    research.md, 2026-09-18) found three independent obstacles to the
+    originally-scoped "lock in a price today, settle later" contract, not
+    just a design gap:
+
+      1. The SEC's 2022 C&DI 101.01 risks reclassifying a forward on
+         still-transfer-restricted shares as a security-based swap
+         requiring Dodd-Frank registration, avoidable (without an
+         issuer waiver KEVO has no way to obtain) by limiting buyers to
+         accredited-at-$10M+ "Eligible Contract Participants."
+      2. A single fixed price locked in at signing is close to the
+         textbook trigger for IRC Section 1259 constructive-sale
+         treatment - immediate taxable gain for the seller before any
+         real proceeds - avoidable via a variable-prepaid-forward
+         structure (a floor/cap price corridor, never one number).
+      3. A real and growing number of companies' own governing documents
+         prohibit this kind of "deemed transfer" arrangement outright
+         (Airbnb's bylaws cited as one real example), and KEVO has no
+         per-company governing-document data to confirm whether any
+         given issuer permits it.
+
+    Confirmed with Eze via AskUserQuestion, 2026-10-23: build with fixes
+    1 and 2 applied (buyer must be an admin-verified Eligible Contract
+    Participant - reusing InvestorEligibility's existing self-submit/
+    admin-verify flow with classification="eligible_contract_participant",
+    rather than inventing a new eligibility system; floor_price/cap_price
+    instead of one fixed price). Obstacle 3 has no code fix - it can only
+    be flagged, never verified by KEVO - so governing_document_review_
+    status starts "not_reviewed" and stays the organizer's/company's own
+    legal responsibility, the same descriptive-only discipline already
+    used for SellerFinancingCollateral's "not_reviewed" default.
+
+    floor_price/cap_price/prepaid_amount are party-stated, never
+    KEVO-computed - the same agreed_price invariant (M10/M11) carried
+    through every contract term in KEVO.
+    """
+    __tablename__ = "forward_sale_contracts"
+
+    id = Column(Integer, primary_key=True)
+    listing_id = Column(Integer, ForeignKey("listings.id"), nullable=False)
+    seller_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    buyer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    company = Column(String(255), nullable=False)
+    asset_type = Column(String(100), nullable=False)
+    floor_price = Column(Numeric(15, 2), nullable=False)
+    cap_price = Column(Numeric(15, 2), nullable=False)
+    prepaid_amount = Column(Numeric(15, 2), nullable=False)
+    trigger_event = Column(String(100), nullable=False)
+    seller_attests_no_governing_document_prohibition = Column(Boolean, nullable=False, default=False)
+    governing_document_review_status = Column(String(50), nullable=False, default="not_reviewed")
+    governing_document_review_notes = Column(String(1000), nullable=True)
+    status = Column(String(50), nullable=False, default="proposed")
+    final_price = Column(Numeric(15, 2), nullable=True)
+    final_quantity = Column(Numeric(15, 4), nullable=True)
+    settlement_notes = Column(String(1000), nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    accepted_at = Column(DateTime, nullable=True)
+    settled_at = Column(DateTime, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)

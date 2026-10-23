@@ -35,6 +35,7 @@ from models import LiquidityCommitment
 from models import LiquidityEventSignal
 from models import SpeedDiscountOffer
 from models import SpvPool, SpvPoolCommitment
+from models import ForwardSaleContract
 import escrow_client
 import wallet_client
 import email_client
@@ -9881,3 +9882,269 @@ def withdraw_spv_pool_commitment(
     db.commit()
     db.refresh(commitment)
     return _serialize_spv_pool_commitment(commitment)
+
+
+# ---------------------------------------------------------------------------
+# M25B - Forward Sale / Pre-Liquidity-Event Contracts, structured-safe
+# scope, 2026-10-23.
+#
+# M25B's own prior research (claude/kevo-m25b-forward-sale-legal-
+# research.md, 2026-09-18) found three independent obstacles: (1)
+# Dodd-Frank security-based-swap reclassification risk on a forward over
+# still-restricted shares, avoidable by limiting buyers to Eligible
+# Contract Participants; (2) IRC Section 1259 constructive-sale tax risk
+# from a single fixed price, avoidable via a floor/cap price corridor
+# instead of one number; (3) some companies' own governing documents ban
+# this kind of arrangement outright, which KEVO has no way to verify.
+# Confirmed with Eze via AskUserQuestion, 2026-10-23: fix (1) and (2) in
+# code, flag (3) as unverified rather than silently ignoring it.
+#
+# Eligible Contract Participant status reuses InvestorEligibility's
+# existing self-submit/admin-verify flow (classification =
+# "eligible_contract_participant") rather than inventing a parallel
+# eligibility system.
+# ---------------------------------------------------------------------------
+
+FORWARD_SALE_TRIGGER_EVENTS = {
+    "holding_period_expiration",
+    "issuer_consent_or_rofr_cleared",
+    "liquidity_event_ipo_or_acquisition",
+}
+
+FORWARD_SALE_DISCLAIMER = (
+    "This is a forward-sale contract structured to address two of the "
+    "three real legal risks KEVO's own research found: a floor/cap price "
+    "range (never one fixed price) to avoid immediate constructive-sale "
+    "tax treatment under IRC Section 1259, and a buyer-side Eligible "
+    "Contract Participant requirement to avoid Dodd-Frank security-based-"
+    "swap reclassification (SEC C&DI 101.01). The third risk - whether "
+    "this company's own governing documents permit this kind of "
+    "arrangement at all - is NOT verified by KEVO; "
+    "governing_document_review_status reflects only the parties' own "
+    "attestation and any admin review, and remains the organizer's and "
+    "company's own legal responsibility. This is not tax or legal advice."
+)
+
+
+def _is_forward_sale_party(contract: ForwardSaleContract, user: UserModel) -> bool:
+    return user.account_type == "admin" or user.id in (contract.seller_id, contract.buyer_id)
+
+
+def _serialize_forward_sale_contract(c: ForwardSaleContract):
+    return {
+        "id": c.id,
+        "listing_id": c.listing_id,
+        "seller_id": c.seller_id,
+        "buyer_id": c.buyer_id,
+        "company": c.company,
+        "asset_type": c.asset_type,
+        "floor_price": c.floor_price,
+        "cap_price": c.cap_price,
+        "prepaid_amount": c.prepaid_amount,
+        "trigger_event": c.trigger_event,
+        "seller_attests_no_governing_document_prohibition": c.seller_attests_no_governing_document_prohibition,
+        "governing_document_review_status": c.governing_document_review_status,
+        "governing_document_review_notes": c.governing_document_review_notes,
+        "status": c.status,
+        "final_price": c.final_price,
+        "final_quantity": c.final_quantity,
+        "settlement_notes": c.settlement_notes,
+        "created_by_user_id": c.created_by_user_id,
+        "created_at": c.created_at,
+        "accepted_at": c.accepted_at,
+        "settled_at": c.settled_at,
+        "cancelled_at": c.cancelled_at,
+        "disclaimer": FORWARD_SALE_DISCLAIMER,
+    }
+
+
+def _buyer_is_verified_ecp(buyer_id: int, db: Session) -> bool:
+    return db.query(InvestorEligibility).filter(
+        InvestorEligibility.buyer_id == buyer_id,
+        InvestorEligibility.classification == "eligible_contract_participant",
+        InvestorEligibility.status == "verified",
+    ).first() is not None
+
+
+@app.post("/forward-sale-contracts")
+def create_forward_sale_contract(
+    listing_id: int,
+    buyer_id: int,
+    floor_price: float,
+    cap_price: float,
+    prepaid_amount: float,
+    trigger_event: str,
+    seller_attests_no_governing_document_prohibition: bool,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    listing = db.query(ListingModel).filter(ListingModel.id == listing_id).first()
+    if listing is None:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    if current_user.id not in (listing.seller_id, buyer_id) and current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="You must be the listing's seller or the named buyer to propose a forward-sale contract on it")
+    if trigger_event not in FORWARD_SALE_TRIGGER_EVENTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"trigger_event must be one of: {', '.join(sorted(FORWARD_SALE_TRIGGER_EVENTS))}"
+        )
+    if floor_price <= 0 or cap_price <= 0:
+        raise HTTPException(status_code=400, detail="floor_price and cap_price must both be greater than zero")
+    if cap_price <= floor_price:
+        raise HTTPException(status_code=400, detail="cap_price must be greater than floor_price - a single fixed price is not permitted (IRC Section 1259 constructive-sale risk)")
+    if prepaid_amount <= 0:
+        raise HTTPException(status_code=400, detail="prepaid_amount must be greater than zero")
+    if not seller_attests_no_governing_document_prohibition:
+        raise HTTPException(
+            status_code=400,
+            detail="seller_attests_no_governing_document_prohibition must be true: the seller must affirmatively attest the company's governing documents do not prohibit this arrangement before a contract can be created"
+        )
+    if not _buyer_is_verified_ecp(buyer_id, db):
+        raise HTTPException(
+            status_code=400,
+            detail="The named buyer must have an admin-verified InvestorEligibility record with classification='eligible_contract_participant' before a forward-sale contract can be created (Dodd-Frank security-based-swap reclassification risk, SEC C&DI 101.01)"
+        )
+    contract = ForwardSaleContract(
+        listing_id=listing_id,
+        seller_id=listing.seller_id,
+        buyer_id=buyer_id,
+        company=listing.company,
+        asset_type=listing.asset_type,
+        floor_price=floor_price,
+        cap_price=cap_price,
+        prepaid_amount=prepaid_amount,
+        trigger_event=trigger_event,
+        seller_attests_no_governing_document_prohibition=seller_attests_no_governing_document_prohibition,
+        governing_document_review_status="not_reviewed",
+        status="proposed",
+        created_by_user_id=current_user.id,
+        created_at=datetime.utcnow(),
+    )
+    db.add(contract)
+    db.commit()
+    db.refresh(contract)
+    return _serialize_forward_sale_contract(contract)
+
+
+@app.put("/forward-sale-contracts/{contract_id}/accept")
+def accept_forward_sale_contract(
+    contract_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    contract = db.query(ForwardSaleContract).filter(ForwardSaleContract.id == contract_id).first()
+    if contract is None:
+        raise HTTPException(status_code=404, detail="Forward-sale contract not found")
+    if not _is_forward_sale_party(contract, current_user):
+        raise HTTPException(status_code=403, detail="Only a party to this contract or an admin can accept it")
+    if current_user.id == contract.created_by_user_id and current_user.account_type != "admin":
+        raise HTTPException(status_code=400, detail="The party that proposed this contract cannot also accept it - it must be accepted by the other party")
+    if contract.status != "proposed":
+        raise HTTPException(status_code=400, detail="Only a proposed contract can be accepted")
+    contract.status = "accepted"
+    contract.accepted_at = datetime.utcnow()
+    db.commit()
+    db.refresh(contract)
+    return _serialize_forward_sale_contract(contract)
+
+
+@app.put("/forward-sale-contracts/{contract_id}/cancel")
+def cancel_forward_sale_contract(
+    contract_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    contract = db.query(ForwardSaleContract).filter(ForwardSaleContract.id == contract_id).first()
+    if contract is None:
+        raise HTTPException(status_code=404, detail="Forward-sale contract not found")
+    if not _is_forward_sale_party(contract, current_user):
+        raise HTTPException(status_code=403, detail="Only a party to this contract or an admin can cancel it")
+    if contract.status not in ("proposed", "accepted"):
+        raise HTTPException(status_code=400, detail="Only a proposed or accepted contract can be cancelled")
+    contract.status = "cancelled"
+    contract.cancelled_at = datetime.utcnow()
+    db.commit()
+    db.refresh(contract)
+    return _serialize_forward_sale_contract(contract)
+
+
+@app.put("/forward-sale-contracts/{contract_id}/governing-document-review")
+def review_forward_sale_contract_governing_documents(
+    contract_id: int,
+    review_status: str,
+    review_notes: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Admin-only, descriptive-only - same discipline as
+    SellerFinancingCollateral.legal_review_status. KEVO has no per-company
+    governing-document data, so this records a human reviewer's own
+    finding; it never changes the contract's legal validity in code.
+    """
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can record a governing-document review")
+    if review_status not in ("not_reviewed", "reviewed_ok", "reviewed_flagged"):
+        raise HTTPException(status_code=400, detail="review_status must be one of: not_reviewed, reviewed_ok, reviewed_flagged")
+    contract = db.query(ForwardSaleContract).filter(ForwardSaleContract.id == contract_id).first()
+    if contract is None:
+        raise HTTPException(status_code=404, detail="Forward-sale contract not found")
+    contract.governing_document_review_status = review_status
+    contract.governing_document_review_notes = review_notes
+    db.commit()
+    db.refresh(contract)
+    return _serialize_forward_sale_contract(contract)
+
+
+@app.put("/forward-sale-contracts/{contract_id}/settle")
+def settle_forward_sale_contract(
+    contract_id: int,
+    final_price: float,
+    settlement_notes: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can settle a forward-sale contract")
+    contract = db.query(ForwardSaleContract).filter(ForwardSaleContract.id == contract_id).first()
+    if contract is None:
+        raise HTTPException(status_code=404, detail="Forward-sale contract not found")
+    if contract.status != "accepted":
+        raise HTTPException(status_code=400, detail="Only an accepted contract can be settled")
+    if final_price < float(contract.floor_price) or final_price > float(contract.cap_price):
+        raise HTTPException(status_code=400, detail="final_price must fall within this contract's floor_price/cap_price range")
+    contract.final_price = final_price
+    contract.final_quantity = round(float(contract.prepaid_amount) / final_price, 4)
+    contract.settlement_notes = settlement_notes
+    contract.status = "settled"
+    contract.settled_at = datetime.utcnow()
+    db.commit()
+    db.refresh(contract)
+    return _serialize_forward_sale_contract(contract)
+
+
+@app.get("/forward-sale-contracts")
+def get_forward_sale_contracts(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    query = db.query(ForwardSaleContract)
+    if current_user.account_type != "admin":
+        query = query.filter(
+            (ForwardSaleContract.seller_id == current_user.id) | (ForwardSaleContract.buyer_id == current_user.id)
+        )
+    return [_serialize_forward_sale_contract(c) for c in query.all()]
+
+
+@app.get("/forward-sale-contracts/{contract_id}")
+def get_forward_sale_contract(
+    contract_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    contract = db.query(ForwardSaleContract).filter(ForwardSaleContract.id == contract_id).first()
+    if contract is None:
+        raise HTTPException(status_code=404, detail="Forward-sale contract not found")
+    if not _is_forward_sale_party(contract, current_user):
+        raise HTTPException(status_code=404, detail="Forward-sale contract not found")
+    return _serialize_forward_sale_contract(contract)
