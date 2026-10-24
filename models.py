@@ -41,6 +41,19 @@ class User(Base):
     # same self-submit/admin-verify posture already used for ownership
     # and evidence verification, not a self-serve signup.
     issuer_company_name = Column(String(255), nullable=True)
+    # M33C (first slice) - Private Market Data & Insights, a reporting
+    # dashboard over data KEVO already produces and already exposes
+    # publicly, unauthenticated, via /price-range, /demand-heatmap,
+    # /demand-curve, and /liquidity-aggregation (M16/M16B's own
+    # deliberate design - identical output for any caller). This does
+    # not change that; those endpoints stay public. It adds a named,
+    # admin-provisioned subscriber account type (mirroring the issuer
+    # account pattern exactly) for a VC/family-office/issuer customer
+    # with a login and a composite dashboard view - the groundwork for
+    # an eventual paid relationship, not a paywall on data that was
+    # already public.
+    insights_subscriber_organization = Column(String(255), nullable=True)
+    insights_subscriber_type = Column(String(50), nullable=True)
     failed_login_attempts = Column(Integer, nullable=False, default=0)
     locked_until = Column(DateTime, nullable=True)
     tokens_valid_since = Column(DateTime, nullable=True)
@@ -1439,3 +1452,60 @@ class ForwardSaleContract(Base):
     accepted_at = Column(DateTime, nullable=True)
     settled_at = Column(DateTime, nullable=True)
     cancelled_at = Column(DateTime, nullable=True)
+
+
+class ApiClient(Base):
+    """
+    M33B (first slice) - KEVO Liquidity-as-a-Service. Deliberately exposes
+    only the advisory/informational engines (M14 transferability, M13
+    compliance check, M25 ROFR status) to third-party integration
+    partners over API-key auth - never the matching engine. KEVO's own
+    prior research (M16B's critical assessment, M20's jurisdictional
+    research) found KEVO's one-to-one matching plausibly already
+    satisfies SEC Rule 3b-16's "exchange" definition; exposing that same
+    engine to other platforms over API would multiply that exposure
+    across every client, not reduce it, so matching is left out of this
+    slice pending the still-open broker-dealer-partner/licensing
+    decision (flagged since M10/M11, sharpened by M20). Settlement is
+    also out of this slice - not a legal-exposure reason, just scoped
+    out by Eze's own explicit choice, 2026-10-24.
+
+    Admin-provisioned only, mirroring every other account type in KEVO
+    (issuer accounts, KYC facts, evidence) - there is no public
+    self-serve signup for API access. A client is a third-party business
+    (a fund, broker, or platform), not a KEVO User - it never logs in
+    with a password and never appears in /users.
+    """
+    __tablename__ = "api_clients"
+
+    id = Column(Integer, primary_key=True)
+    organization_name = Column(String(255), nullable=False)
+    contact_email = Column(String(255), nullable=False)
+    description = Column(String(1000), nullable=True)
+    active = Column(Boolean, nullable=False, default=True)
+    created_by_admin_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime, nullable=True)
+
+
+class ApiKey(Base):
+    """
+    The bearer credential for an ApiClient. Only a SHA-256 hash of the
+    raw key is ever stored - the raw value is returned exactly once, in
+    the POST /admin/api-clients (or key-rotation) response, the same
+    discipline already used for PasswordResetToken/WithdrawalConfirmation.
+    key_prefix (the raw key's first 12 characters) is stored unhashed
+    purely so an admin can tell keys apart in a list without being able
+    to reconstruct the full key from it. Revoking a client revokes every
+    key under it; a key can also be revoked individually via rotation
+    without touching the client itself.
+    """
+    __tablename__ = "api_keys"
+
+    id = Column(Integer, primary_key=True)
+    api_client_id = Column(Integer, ForeignKey("api_clients.id"), nullable=False)
+    key_hash = Column(String(64), nullable=False, unique=True)
+    key_prefix = Column(String(12), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime, nullable=True)
+    last_used_at = Column(DateTime, nullable=True)

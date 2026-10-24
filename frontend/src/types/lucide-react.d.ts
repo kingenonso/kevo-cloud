@@ -53,4 +53,5 @@ declare module "lucide-react" {
   export const CircleDollarSign: LucideIcon
   export const PlusCircle: LucideIcon
   export const Loader2: LucideIcon
+  export const KeyRound: LucideIcon
 }

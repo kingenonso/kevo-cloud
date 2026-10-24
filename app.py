@@ -2,7 +2,7 @@ import bisect
 import os
 import statistics
 from collections import defaultdict
-from fastapi import FastAPI, Depends, HTTPException, Request, File, UploadFile
+from fastapi import FastAPI, Depends, HTTPException, Request, File, UploadFile, Header
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -36,6 +36,7 @@ from models import LiquidityEventSignal
 from models import SpeedDiscountOffer
 from models import SpvPool, SpvPoolCommitment
 from models import ForwardSaleContract
+from models import ApiClient, ApiKey
 import escrow_client
 import wallet_client
 import email_client
@@ -952,6 +953,53 @@ def require_issuer_user(current_user: UserModel = Depends(get_current_user)) -> 
     return current_user
 
 
+def require_insights_subscriber(current_user: UserModel = Depends(get_current_user)) -> UserModel:
+    """
+    M33C (first slice) - gate for the Insights Dashboard. Mirrors
+    require_issuer_user exactly: admin-provisioned only (POST
+    /admin/insights-subscriber-accounts), no public self-serve signup.
+    The dashboard composes data that is ALSO independently reachable
+    unauthenticated via /price-range, /demand-heatmap, /demand-curve,
+    and /liquidity-aggregation (M16/M16B's own deliberate design) - this
+    gate exists to give KEVO a named relationship with the external
+    customer (VC, family office, issuing company) and a query log, not
+    to restrict data that was already public.
+    """
+    if current_user.account_type != "insights_subscriber" or not current_user.insights_subscriber_organization:
+        raise HTTPException(
+            status_code=403,
+            detail="This account is not provisioned as an insights subscriber account"
+        )
+    return current_user
+
+
+def get_api_client(
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    db: Session = Depends(get_db)
+) -> ApiClient:
+    """
+    M33B (first slice) - authenticates a third-party integration partner
+    by API key, never a KEVO user JWT. Mirrors get_current_user's own
+    discipline: one generic 401 on any failure (missing header, unknown
+    key, a key whose client was revoked, or a client an admin
+    deactivated) so a caller can never distinguish "wrong key" from
+    "right key, revoked client" - the same posture used throughout this
+    app for login/auth failures.
+    """
+    if not x_api_key:
+        raise HTTPException(status_code=401, detail="Missing X-API-Key header")
+    key_hash = hashlib.sha256(x_api_key.encode()).hexdigest()
+    api_key = db.query(ApiKey).filter(ApiKey.key_hash == key_hash).first()
+    if api_key is None or api_key.revoked_at is not None:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    client = db.query(ApiClient).filter(ApiClient.id == api_key.api_client_id).first()
+    if client is None or not client.active or client.revoked_at is not None:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    api_key.last_used_at = datetime.utcnow()
+    db.commit()
+    return client
+
+
 @app.post("/login")
 @limiter.limit("5/minute")
 def login(request: Request, credentials: LoginRequest, db: Session = Depends(get_db)):
@@ -1569,6 +1617,20 @@ class IssuerAccountCreate(BaseModel):
     password: str
     company_name: str
     jurisdiction: str | None = None
+
+
+class InsightsSubscriberAccountCreate(BaseModel):
+    name: str
+    email: str
+    password: str
+    organization_name: str
+    subscriber_type: str = "other"  # "vc" | "family_office" | "issuer" | "other"
+
+
+class ApiClientCreate(BaseModel):
+    organization_name: str
+    contact_email: str
+    description: str | None = None
 
 
 @app.post("/admin/issuer-accounts")
@@ -10632,3 +10694,365 @@ def get_forward_sale_contract(
     if not _is_forward_sale_party(contract, current_user):
         raise HTTPException(status_code=404, detail="Forward-sale contract not found")
     return _serialize_forward_sale_contract(contract)
+
+
+# ---------------------------------------------------------------------------
+# M33B (first slice) -- KEVO Liquidity-as-a-Service: admin provisioning of
+# third-party API clients, plus external, API-key-authenticated read-only
+# access to the advisory engines. Scoped by Eze's own explicit choice,
+# 2026-10-24 (see ApiClient's docstring in models.py for the Rule 3b-16
+# reasoning behind excluding the matching engine from this slice, and
+# settlement from this slice by plain choice rather than legal exposure).
+# Every /api/v1/ endpoint mirrors an existing internal endpoint's exact
+# response shape - nothing new is computed, and no PII is surfaced that
+# the internal versions don't already surface (none of these three engines
+# return any PII in the first place).
+# ---------------------------------------------------------------------------
+
+@app.post("/admin/api-clients")
+def create_api_client(
+    payload: ApiClientCreate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    if not payload.organization_name.strip():
+        raise HTTPException(status_code=400, detail="organization_name is required")
+
+    client = ApiClient(
+        organization_name=payload.organization_name.strip(),
+        contact_email=payload.contact_email,
+        description=payload.description,
+        active=True,
+        created_by_admin_id=current_user.id,
+        created_at=datetime.utcnow(),
+    )
+    db.add(client)
+    db.flush()  # need client.id before creating its first key
+
+    raw_key = secrets.token_urlsafe(32)
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    api_key = ApiKey(
+        api_client_id=client.id,
+        key_hash=key_hash,
+        key_prefix=raw_key[:12],
+        created_at=datetime.utcnow(),
+    )
+    db.add(api_key)
+    log_audit_event(
+        db, current_user.id, "api_client_created",
+        target_type="api_client", target_id=client.id,
+        detail=client.organization_name
+    )
+    db.commit()
+    db.refresh(client)
+
+    return {
+        "message": "API client created. The API key below is shown once and cannot be retrieved again.",
+        "api_client": {
+            "id": client.id,
+            "organization_name": client.organization_name,
+            "contact_email": client.contact_email,
+            "description": client.description,
+            "active": client.active,
+        },
+        "api_key": raw_key
+    }
+
+
+@app.get("/admin/api-clients")
+def list_api_clients(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    clients = db.query(ApiClient).all()
+    result = []
+    for c in clients:
+        keys = db.query(ApiKey).filter(ApiKey.api_client_id == c.id).all()
+        result.append({
+            "id": c.id,
+            "organization_name": c.organization_name,
+            "contact_email": c.contact_email,
+            "description": c.description,
+            "active": c.active,
+            "created_at": c.created_at,
+            "revoked_at": c.revoked_at,
+            "keys": [
+                {
+                    "id": k.id,
+                    "key_prefix": k.key_prefix,
+                    "created_at": k.created_at,
+                    "revoked_at": k.revoked_at,
+                    "last_used_at": k.last_used_at,
+                }
+                for k in keys
+            ]
+        })
+    return result
+
+
+@app.put("/admin/api-clients/{client_id}/revoke")
+def revoke_api_client(
+    client_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    client = db.query(ApiClient).filter(ApiClient.id == client_id).first()
+    if client is None:
+        raise HTTPException(status_code=404, detail="API client not found")
+
+    client.active = False
+    client.revoked_at = datetime.utcnow()
+    for k in db.query(ApiKey).filter(ApiKey.api_client_id == client.id, ApiKey.revoked_at.is_(None)).all():
+        k.revoked_at = datetime.utcnow()
+
+    log_audit_event(
+        db, current_user.id, "api_client_revoked",
+        target_type="api_client", target_id=client.id
+    )
+    db.commit()
+    return {"message": "API client revoked", "id": client.id}
+
+
+@app.post("/admin/api-clients/{client_id}/keys")
+def rotate_api_client_key(
+    client_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """Issues a brand-new key for an existing client without revoking the
+    client or any of its other keys - a key rotation, not a re-provision."""
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    client = db.query(ApiClient).filter(ApiClient.id == client_id).first()
+    if client is None:
+        raise HTTPException(status_code=404, detail="API client not found")
+    if not client.active:
+        raise HTTPException(status_code=400, detail="Cannot issue a new key for a revoked client")
+
+    raw_key = secrets.token_urlsafe(32)
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    api_key = ApiKey(
+        api_client_id=client.id,
+        key_hash=key_hash,
+        key_prefix=raw_key[:12],
+        created_at=datetime.utcnow(),
+    )
+    db.add(api_key)
+    log_audit_event(
+        db, current_user.id, "api_client_key_rotated",
+        target_type="api_client", target_id=client.id
+    )
+    db.commit()
+    return {
+        "message": "New API key issued. Shown once and cannot be retrieved again.",
+        "api_key": raw_key
+    }
+
+
+@app.get("/api/v1/transferability/listing/{listing_id}")
+def api_get_transferability(
+    listing_id: int,
+    db: Session = Depends(get_db),
+    api_client: ApiClient = Depends(get_api_client)
+):
+    listing = db.query(ListingModel).filter(ListingModel.id == listing_id).first()
+    if listing is None:
+        raise HTTPException(status_code=404, detail="Listing not found")
+
+    result = evaluate_transferability(listing, db)
+    log_audit_event(
+        db, None, "api_client_transferability_check",
+        target_type="listing", target_id=listing.id,
+        detail=f"api_client_id={api_client.id}"
+    )
+    db.commit()
+
+    return {
+        "listing_id": listing.id,
+        "status": result["status"],
+        "reasons": result["reasons"],
+        "applicable_rule_count": result["applicable_rule_count"],
+        "path_to_eligibility": result["path_to_eligibility"],
+        "forecast_date": result["forecast_date"]
+    }
+
+
+@app.get("/api/v1/compliance-check/{buyer_id}/{listing_id}")
+def api_get_compliance_check(
+    buyer_id: int,
+    listing_id: int,
+    db: Session = Depends(get_db),
+    api_client: ApiClient = Depends(get_api_client)
+):
+    buyer = db.query(UserModel).filter(UserModel.id == buyer_id).first()
+    if buyer is None:
+        raise HTTPException(status_code=404, detail="Buyer not found")
+
+    listing = db.query(ListingModel).filter(ListingModel.id == listing_id).first()
+    if listing is None:
+        raise HTTPException(status_code=404, detail="Listing not found")
+
+    result = assess_compliance(buyer, listing, db)
+    log_audit_event(
+        db, None, "api_client_compliance_check",
+        target_type="listing", target_id=listing.id,
+        detail=f"api_client_id={api_client.id} buyer_id={buyer.id}"
+    )
+    db.commit()
+
+    return {
+        "buyer_id": buyer.id,
+        "listing_id": listing.id,
+        "status": result["status"],
+        "explanation": result["explanation"],
+        "applicable_rule_codes": result["applicable_rule_codes"]
+    }
+
+
+@app.get("/api/v1/rofr-status/transaction/{transaction_id}")
+def api_get_rofr_status(
+    transaction_id: int,
+    db: Session = Depends(get_db),
+    api_client: ApiClient = Depends(get_api_client)
+):
+    transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if transaction is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    requests = db.query(RofrRequest).filter(RofrRequest.transaction_id == transaction_id).all()
+    log_audit_event(
+        db, None, "api_client_rofr_check",
+        target_type="transaction", target_id=transaction.id,
+        detail=f"api_client_id={api_client.id}"
+    )
+    db.commit()
+
+    return {
+        "transaction_id": transaction.id,
+        "rofr_requests": [
+            {
+                "id": r.id,
+                "status": r.status,
+                "response_notes": r.response_notes,
+                "responded_at": r.responded_at,
+                "response_due_date": r.response_due_date,
+            }
+            for r in requests
+        ]
+    }
+
+
+# ---------------------------------------------------------------------------
+# M33C (first slice) -- Private Market Data & Insights: a reporting
+# dashboard over data KEVO already produces and already exposes publicly,
+# unauthenticated, via /price-range, /demand-heatmap, /demand-curve, and
+# /liquidity-aggregation. This does not change that - those endpoints stay
+# public. This adds a named, admin-provisioned subscriber account type for
+# a VC/family-office/issuer customer with a login, one composite dashboard
+# endpoint, and a query log - groundwork for an eventual paid relationship,
+# not a paywall on data that was already public.
+# ---------------------------------------------------------------------------
+
+@app.post("/admin/insights-subscriber-accounts")
+def create_insights_subscriber_account(
+    payload: InsightsSubscriberAccountCreate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    existing = db.query(UserModel).filter(UserModel.email == payload.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    if not payload.organization_name.strip():
+        raise HTTPException(status_code=400, detail="organization_name is required")
+
+    if payload.subscriber_type not in ("vc", "family_office", "issuer", "other"):
+        raise HTTPException(status_code=400, detail="subscriber_type must be one of: vc, family_office, issuer, other")
+
+    subscriber = UserModel(
+        name=payload.name,
+        email=payload.email,
+        hashed_password=hash_password(payload.password),
+        role="insights_subscriber",
+        roles=[],
+        account_type="insights_subscriber",
+        insights_subscriber_organization=payload.organization_name.strip(),
+        insights_subscriber_type=payload.subscriber_type,
+        kyc_status="not_applicable",
+        terms_accepted=True,
+        terms_accepted_at=datetime.utcnow(),
+    )
+
+    db.add(subscriber)
+    log_audit_event(
+        db, current_user.id, "insights_subscriber_account_created",
+        target_type="user", detail=payload.organization_name.strip()
+    )
+    db.commit()
+    db.refresh(subscriber)
+
+    return {
+        "message": "Insights subscriber account created",
+        "subscriber": {
+            "id": subscriber.id,
+            "name": subscriber.name,
+            "email": subscriber.email,
+            "organization_name": subscriber.insights_subscriber_organization,
+            "subscriber_type": subscriber.insights_subscriber_type,
+            "account_type": subscriber.account_type
+        }
+    }
+
+
+@app.get("/insights/me")
+def get_insights_subscriber_profile(
+    current_user: UserModel = Depends(require_insights_subscriber)
+):
+    return {
+        "id": current_user.id,
+        "name": current_user.name,
+        "email": current_user.email,
+        "organization_name": current_user.insights_subscriber_organization,
+        "subscriber_type": current_user.insights_subscriber_type,
+    }
+
+
+@app.get("/insights/dashboard")
+def get_insights_dashboard(
+    company: str,
+    asset_type: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(require_insights_subscriber)
+):
+    price_range = build_price_range(company, asset_type, db)
+    demand_heatmap = build_demand_heatmap(company, asset_type, db)
+    demand_curve = build_demand_curve(company, asset_type, db)
+    liquidity_aggregation = build_liquidity_aggregation(company, asset_type, db)
+
+    log_audit_event(
+        db, current_user.id, "insights_dashboard_query",
+        target_type="company", detail=f"company={company} asset_type={asset_type}"
+    )
+    db.commit()
+
+    return {
+        "company": company,
+        "asset_type": asset_type,
+        "price_range": price_range,
+        "demand_heatmap": demand_heatmap,
+        "demand_curve": demand_curve,
+        "liquidity_aggregation": liquidity_aggregation,
+    }

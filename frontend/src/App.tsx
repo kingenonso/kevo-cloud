@@ -32,6 +32,8 @@ import { SellerFinancingPage } from "@/pages/SellerFinancing"
 import { BrowsePage } from "@/pages/Browse"
 import { CostCalculatorPage } from "@/pages/CostCalculator"
 import { IssuerPortalPage } from "@/pages/IssuerPortal"
+import { PlatformAccessPage } from "@/pages/PlatformAccess"
+import { InsightsDashboardPage } from "@/pages/InsightsDashboard"
 
 export default function App() {
   return (
@@ -68,6 +70,8 @@ export default function App() {
         <Route path="/cost-calculator" element={<AppShell title="Cost Calculator"><CostCalculatorPage /></AppShell>} />
         <Route path="/settings" element={<AppShell title="Settings"><SettingsPage /></AppShell>} />
         <Route path="/issuer-portal" element={<AppShell title="Issuer Portal"><IssuerPortalPage /></AppShell>} />
+        <Route path="/admin/platform-access" element={<AppShell title="Platform Access"><PlatformAccessPage /></AppShell>} />
+        <Route path="/insights-dashboard" element={<AppShell title="Insights Dashboard"><InsightsDashboardPage /></AppShell>} />
       </Route>
     </Routes>
   )

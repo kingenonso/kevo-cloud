@@ -10,6 +10,7 @@ import {
   Settings,
   Store,
   Landmark,
+  KeyRound,
   type LucideIcon,
 } from "lucide-react"
 
@@ -99,6 +100,16 @@ export const groupedNav: NavGroup[] = [
       { label: "Market Intelligence", href: "/market-intelligence" },
       { label: "Liquidity Event Radar", href: "/liquidity-event-radar" },
       { label: "Speed Discount", href: "/speed-discount" },
+      { label: "Insights Dashboard", href: "/insights-dashboard" },
+    ],
+  },
+  {
+    type: "group",
+    key: "platform",
+    label: "Platform",
+    icon: KeyRound,
+    items: [
+      { label: "API & Insights Access", href: "/admin/platform-access" },
     ],
   },
 ]
