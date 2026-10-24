@@ -931,6 +931,27 @@ def require_verified_user(current_user: UserModel = Depends(get_current_user)) -
     return current_user
 
 
+def require_issuer_user(current_user: UserModel = Depends(get_current_user)) -> UserModel:
+    """
+    M33 (first slice) - gate for the Issuer Liquidity Portal. KEVO has had
+    no company/issuer login-capable actor until now (RofrRequest and
+    TenderOfferProgram's own docstrings flagged this gap explicitly,
+    2026-09-20/25) - every company-facing action before this was
+    admin-administered on the company's behalf. This is the first real
+    issuer-side account type: provisioned by an admin (POST
+    /admin/issuer-accounts) after verifying off-platform that the account
+    holder actually represents the named company - the same self-submit/
+    admin-verify posture already used for ownership/evidence verification
+    elsewhere, not a self-serve signup.
+    """
+    if current_user.account_type != "issuer" or not current_user.issuer_company_name:
+        raise HTTPException(
+            status_code=403,
+            detail="This account is not provisioned as an issuer account"
+        )
+    return current_user
+
+
 @app.post("/login")
 @limiter.limit("5/minute")
 def login(request: Request, credentials: LoginRequest, db: Session = Depends(get_db)):
@@ -1539,6 +1560,258 @@ def get_my_profile(
         "kyc_status": current_user.kyc_status,
         "jurisdiction": current_user.jurisdiction,
         "account_type": current_user.account_type
+    }
+
+
+class IssuerAccountCreate(BaseModel):
+    name: str
+    email: str
+    password: str
+    company_name: str
+    jurisdiction: str | None = None
+
+
+@app.post("/admin/issuer-accounts")
+def create_issuer_account(
+    payload: IssuerAccountCreate,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    M33 (first slice) - provisions the first real issuer login-capable
+    account. Admin-only: verifying the caller actually represents the
+    named company is a real-world KYB step that happens off-platform
+    before this call is made, the same way ownership and evidence
+    verification already work elsewhere in the app (self-submit facts,
+    admin attests them real) - there is deliberately no public self-serve
+    signup for this account type.
+    """
+    if current_user.account_type != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    existing = db.query(UserModel).filter(UserModel.email == payload.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    if not payload.company_name.strip():
+        raise HTTPException(status_code=400, detail="company_name is required")
+
+    issuer = UserModel(
+        name=payload.name,
+        email=payload.email,
+        hashed_password=hash_password(payload.password),
+        role="issuer",
+        roles=[],
+        account_type="issuer",
+        issuer_company_name=payload.company_name.strip(),
+        jurisdiction=payload.jurisdiction,
+        kyc_status="not_applicable",
+        terms_accepted=True,
+        terms_accepted_at=datetime.utcnow(),
+    )
+
+    db.add(issuer)
+    log_audit_event(
+        db, current_user.id, "issuer_account_created",
+        target_type="user", detail=payload.company_name.strip()
+    )
+    db.commit()
+    db.refresh(issuer)
+
+    return {
+        "message": "Issuer account created",
+        "issuer": {
+            "id": issuer.id,
+            "name": issuer.name,
+            "email": issuer.email,
+            "company_name": issuer.issuer_company_name,
+            "account_type": issuer.account_type
+        }
+    }
+
+
+@app.get("/issuer/me")
+def get_issuer_profile(
+    current_user: UserModel = Depends(require_issuer_user)
+):
+    return {
+        "id": current_user.id,
+        "name": current_user.name,
+        "email": current_user.email,
+        "company_name": current_user.issuer_company_name,
+        "account_type": current_user.account_type
+    }
+
+
+@app.get("/issuer/dashboard")
+def get_issuer_dashboard(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(require_issuer_user)
+):
+    """
+    M33 (first slice) - the Issuer Liquidity Portal. Read-only, scoped
+    entirely to the calling issuer's own company (matched by the exact
+    free-text company name already used across Listing/OwnershipRecord/
+    TenderOfferProgram/BuyerInterest - no normalized Company table exists
+    in this schema yet, confirmed while auditing models.py for this
+    milestone). Deliberately omits individual buyer identity from the
+    investor-demand section and per-buyer compliance explanations from
+    the compliance section - an issuer has no platform relationship with
+    KEVO's individual investors, so both are surfaced as aggregate counts
+    only. cap_table_sync is an honest stub: a live vendor integration
+    (Carta/Ledgy/Pulley) is the read-side cap-table sync this slice does
+    not build yet (distinct from M32D's already-researched write/push
+    side) - tracked as a follow-up, not fabricated here.
+    """
+    company = current_user.issuer_company_name
+
+    listings = db.query(ListingModel).filter(ListingModel.company == company).all()
+    listing_ids = [l.id for l in listings]
+
+    liquidity_seekers = []
+    for listing in listings:
+        seller = db.query(UserModel).filter(UserModel.id == listing.seller_id).first()
+        liquidity_seekers.append({
+            "listing_id": listing.id,
+            "seller_id": listing.seller_id,
+            "seller_name": seller.name if seller else None,
+            "asset_type": listing.asset_type,
+            "quantity": listing.quantity,
+            "asking_price": float(listing.asking_price),
+            "is_transferable": listing.is_transferable
+        })
+
+    pending_transfers = []
+    tx_ids = []
+    if listing_ids:
+        all_transactions = db.query(Transaction).filter(
+            Transaction.listing_id.in_(listing_ids)
+        ).all()
+        tx_ids = [t.id for t in all_transactions]
+        for tx in all_transactions:
+            if tx.status not in ("completed", "cancelled"):
+                pending_transfers.append({
+                    "transaction_id": tx.id,
+                    "listing_id": tx.listing_id,
+                    "quantity": tx.quantity,
+                    "status": tx.status,
+                    "settlement_currency": tx.settlement_currency
+                })
+
+    rofr_requests = []
+    if tx_ids:
+        rofr_rows = db.query(RofrRequest).filter(RofrRequest.transaction_id.in_(tx_ids)).all()
+        for r in rofr_rows:
+            rofr_requests.append({
+                "rofr_request_id": r.id,
+                "transaction_id": r.transaction_id,
+                "status": r.status,
+                "response_due_date": str(r.response_due_date) if r.response_due_date else None,
+                "responded_at": r.responded_at.isoformat() if r.responded_at else None
+            })
+
+    ownership_records = db.query(OwnershipRecord).filter(OwnershipRecord.company == company).all()
+    ownership_on_file = [
+        {
+            "ownership_record_id": o.id,
+            "seller_id": o.seller_id,
+            "asset_type": o.asset_type,
+            "quantity": o.quantity,
+            "verification_status": o.verification_status,
+            "acquisition_date": str(o.acquisition_date) if o.acquisition_date else None
+        }
+        for o in ownership_records
+    ]
+
+    tender_rows = db.query(TenderOfferProgram).filter(TenderOfferProgram.company == company).all()
+    tender_programs = [
+        {
+            "program_id": t.id,
+            "status": t.status,
+            "price_per_share": float(t.price_per_share),
+            "opens_at": t.opens_at.isoformat(),
+            "closes_at": t.closes_at.isoformat(),
+            "is_recurring": t.is_recurring
+        }
+        for t in tender_rows
+    ]
+
+    total_quantity = sum(o.quantity for o in ownership_records)
+    by_seller = {}
+    for o in ownership_records:
+        by_seller[o.seller_id] = by_seller.get(o.seller_id, 0) + o.quantity
+    top_holder_share_pct = None
+    if total_quantity > 0 and by_seller:
+        top_holder_share_pct = round((max(by_seller.values()) / total_quantity) * 100, 2)
+
+    shareholder_concentration = {
+        "total_quantity_on_file": total_quantity,
+        "distinct_holders": len(by_seller),
+        "top_holder_share_pct": top_holder_share_pct
+    }
+
+    transfer_restrictions_by_id = {}
+    for listing in listings:
+        for rule in find_applicable_transferability_rules(listing, db):
+            transfer_restrictions_by_id[rule.id] = {
+                "rule_id": rule.id,
+                "rule_code": rule.rule_code,
+                "jurisdiction": rule.jurisdiction,
+                "asset_type": rule.asset_type,
+                "requirement": rule.requirement,
+                "decision_if_unmet": rule.decision_if_unmet,
+                "source_reference": rule.source_reference
+            }
+
+    investor_demand_rows = db.query(BuyerInterest).filter(
+        BuyerInterest.company == company,
+        BuyerInterest.status == "active"
+    ).all()
+    investor_demand = {
+        "active_interest_count": len(investor_demand_rows),
+        "total_desired_quantity": sum(r.desired_quantity for r in investor_demand_rows)
+    }
+
+    # Real assess_compliance() status values, per its own docstring:
+    # blocked / needs_evidence / review / eligible_pending_review.
+    compliance_requests = {
+        "blocked": 0,
+        "needs_evidence": 0,
+        "review": 0,
+        "eligible_pending_review": 0,
+        "other": 0
+    }
+    if listing_ids:
+        decisions = db.query(ComplianceDecisionLedger).filter(
+            ComplianceDecisionLedger.listing_id.in_(listing_ids)
+        ).all()
+        for d in decisions:
+            key = d.decision_status if d.decision_status in compliance_requests else "other"
+            compliance_requests[key] += 1
+
+    cap_table_sync = {
+        "connected": False,
+        "provider": None,
+        "last_synced_at": None,
+        "note": (
+            "Live cap-table sync (e.g. Carta/Ledgy/Pulley) is not yet "
+            "built. Ownership data above is KEVO's own internal records, "
+            "not pulled from an external cap table system."
+        )
+    }
+
+    return {
+        "company_name": company,
+        "liquidity_seekers": liquidity_seekers,
+        "pending_transfers": pending_transfers,
+        "rofr_requests": rofr_requests,
+        "ownership_on_file": ownership_on_file,
+        "tender_programs": tender_programs,
+        "shareholder_concentration": shareholder_concentration,
+        "transfer_restrictions": list(transfer_restrictions_by_id.values()),
+        "investor_demand": investor_demand,
+        "compliance_requests": compliance_requests,
+        "cap_table_sync": cap_table_sync
     }
 
 

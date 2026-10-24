@@ -9,6 +9,7 @@ import {
   Zap,
   Settings,
   Store,
+  Landmark,
   type LucideIcon,
 } from "lucide-react"
 
@@ -75,6 +76,15 @@ export const groupedNav: NavGroup[] = [
       { label: "ROFR", href: "/rofr" },
       { label: "Eligibility", href: "/eligibility" },
       { label: "Withdrawal Review", href: "/admin/withdrawal-review" },
+    ],
+  },
+  {
+    type: "group",
+    key: "issuer",
+    label: "Issuer",
+    icon: Landmark,
+    items: [
+      { label: "Issuer Portal", href: "/issuer-portal" },
     ],
   },
   {

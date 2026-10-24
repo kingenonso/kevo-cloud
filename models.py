@@ -27,6 +27,20 @@ class User(Base):
     seller_affiliate_status = Column(String(50), nullable=True)
     hashed_password = Column(String(255), nullable=True)
     account_type = Column(String(50), nullable=False, default="participant")
+    # M33 (first slice) - the Issuer Liquidity Portal. KEVO had no
+    # company/issuer login-capable actor before this (RofrRequest and
+    # TenderOfferProgram's own docstrings flagged this exact gap,
+    # 2026-09-20/25, and confirmed it out of scope for those milestones).
+    # Set only when account_type == "issuer"; holds the same free-text
+    # company name already used on Listing/OwnershipRecord/
+    # TenderOfferProgram.company (no normalized Company table exists
+    # anywhere in this schema), so the portal filters those tables by
+    # exact string match against this value. Provisioned by an admin via
+    # POST /admin/issuer-accounts after off-platform verification that
+    # the account holder actually represents the named company - the
+    # same self-submit/admin-verify posture already used for ownership
+    # and evidence verification, not a self-serve signup.
+    issuer_company_name = Column(String(255), nullable=True)
     failed_login_attempts = Column(Integer, nullable=False, default=0)
     locked_until = Column(DateTime, nullable=True)
     tokens_valid_since = Column(DateTime, nullable=True)
