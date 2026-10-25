@@ -19,6 +19,7 @@ type RofrRequest = {
   transferability_rule_id: number
   status: string
   source_reference: string | null
+  rofr_response_window_days: number | null
   response_due_date: string | null
   response_notes: string | null
 }
@@ -51,6 +52,8 @@ export function RofrPage() {
   const [selectedTxId, setSelectedTxId] = useState("")
   const [applicableRules, setApplicableRules] = useState<ApplicableRule[]>([])
   const [selectedRuleId, setSelectedRuleId] = useState("")
+  const [createSourceReference, setCreateSourceReference] = useState("")
+  const [createWindowDays, setCreateWindowDays] = useState("")
   const [createError, setCreateError] = useState<string | null>(null)
 
   const [respondTarget, setRespondTarget] = useState<RofrRequest | null>(null)
@@ -99,12 +102,18 @@ export function RofrPage() {
       setCreateError("Select a transaction and an applicable rule.")
       return
     }
+    if (createWindowDays && Number(createWindowDays) <= 0) {
+      setCreateError("Response window (days) must be a positive number.")
+      return
+    }
     const response = await apiFetch("/rofr-requests", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         transaction_id: Number(selectedTxId),
         transferability_rule_id: Number(selectedRuleId),
+        source_reference: createSourceReference || null,
+        rofr_response_window_days: createWindowDays ? Number(createWindowDays) : null,
       }),
     })
     if (!response.ok) {
@@ -116,6 +125,8 @@ export function RofrPage() {
     setSelectedTxId("")
     setSelectedRuleId("")
     setApplicableRules([])
+    setCreateSourceReference("")
+    setCreateWindowDays("")
     await load()
   }
 
@@ -162,18 +173,22 @@ export function RofrPage() {
           <p className="text-sm text-muted-foreground">No ROFR requests yet.</p>
         ) : (
           <div className="divide-y divide-border">
-            <div className="grid grid-cols-5 gap-4 pb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="grid grid-cols-6 gap-4 pb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
               <div>Transaction</div>
               <div>Rule</div>
               <div>Status</div>
+              <div>Window</div>
               <div>Response Due</div>
               <div>Actions</div>
             </div>
             {requests.map((r) => (
-              <div key={r.id} className="grid grid-cols-5 items-center gap-4 py-3 text-sm">
+              <div key={r.id} className="grid grid-cols-6 items-center gap-4 py-3 text-sm">
                 <div className="text-foreground">#{r.transaction_id}</div>
                 <div className="text-muted-foreground">#{r.transferability_rule_id}</div>
                 <div><StatusBadge status={r.status} /></div>
+                <div className="text-muted-foreground" title={r.source_reference ?? undefined}>
+                  {r.rofr_response_window_days ? `${r.rofr_response_window_days}d` : "-"}
+                </div>
                 <div className="text-muted-foreground">
                   {r.response_due_date ? new Date(r.response_due_date).toLocaleDateString() : "-"}
                 </div>
@@ -234,6 +249,35 @@ export function RofrPage() {
                 </select>
               </div>
             )}
+            <div>
+              <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Source Reference (optional)
+              </label>
+              <Input
+                value={createSourceReference}
+                onChange={(e) => setCreateSourceReference(e.target.value)}
+                placeholder="e.g. MOI clause 14.3, Shareholders' Agreement s.9"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Cite the governing document and clause this ROFR request is based on, if you have one.
+              </p>
+            </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Response Window, in Days (optional)
+              </label>
+              <Input
+                type="number"
+                min="1"
+                value={createWindowDays}
+                onChange={(e) => setCreateWindowDays(e.target.value)}
+                placeholder="Leave blank unless you have the real number"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Only fill this in if you have the real response window from this deal's own MOI, Articles,
+                or shareholders' agreement. There is no default — KEVO never invents or assumes this number.
+              </p>
+            </div>
             {createError && <p className="text-sm text-destructive">{createError}</p>}
             <DialogFooter>
               <Button type="submit" className="w-full">Submit Request</Button>

@@ -467,3 +467,95 @@ def test_response_due_date_null_when_rule_has_no_window(client, db_session):
     assert resp.status_code == 200
     body = resp.json()
     assert body["response_due_date"] is None
+
+
+# --- per-request rofr_response_window_days (added 2026-10-25) ---
+#
+# Dedicated legal research done 2026-10-25 (South Africa, Nigeria, UK)
+# confirmed none of those jurisdictions has a statutory default ROFR
+# response window -- it's always a specific deal's own MOI/shareholders'
+# agreement term. So the real number, when the submitter actually has
+# it, is entered per-request now, not inherited from a shared rule.
+
+def test_request_level_window_computes_response_due_date(client, db_session):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer)
+    rule = make_transferability_rule(db_session)  # no rule-wide window set
+
+    resp = client.post("/rofr-requests", headers=auth_headers(seller), json={
+        "transaction_id": txn.id,
+        "transferability_rule_id": rule.id,
+        "rofr_response_window_days": 21,
+        "source_reference": "This deal's own shareholders' agreement clause 9.1, 21-day window",
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    expected_due = (date.today() + timedelta(days=21)).isoformat()
+    assert body["response_due_date"] == expected_due
+    assert body["rofr_response_window_days"] == 21
+
+
+def test_request_level_window_overrides_rule_level_window(client, db_session):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer)
+    rule = make_transferability_rule(db_session)
+    rule.rofr_response_window_days = 30
+    db_session.commit()
+
+    resp = client.post("/rofr-requests", headers=auth_headers(seller), json={
+        "transaction_id": txn.id,
+        "transferability_rule_id": rule.id,
+        "rofr_response_window_days": 14,
+        "source_reference": "This deal's own, shorter, real window overrides the rule's",
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    expected_due = (date.today() + timedelta(days=14)).isoformat()
+    assert body["response_due_date"] == expected_due
+    assert body["rofr_response_window_days"] == 14
+
+
+def test_omitted_request_level_window_falls_back_to_rule_level(client, db_session):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer)
+    rule = make_transferability_rule(db_session)
+    rule.rofr_response_window_days = 30
+    db_session.commit()
+
+    resp = client.post("/rofr-requests", headers=auth_headers(seller), json={
+        "transaction_id": txn.id,
+        "transferability_rule_id": rule.id,
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    expected_due = (date.today() + timedelta(days=30)).isoformat()
+    assert body["response_due_date"] == expected_due
+    assert body["rofr_response_window_days"] == 30
+
+
+def test_non_positive_request_level_window_rejected(client, db_session):
+    seller = make_user(db_session, "1", role="seller")
+    buyer = make_user(db_session, "2", role="buyer")
+    listing = make_listing(db_session, seller)
+    txn = make_transaction(db_session, listing, buyer)
+    rule = make_transferability_rule(db_session)
+
+    resp_zero = client.post("/rofr-requests", headers=auth_headers(seller), json={
+        "transaction_id": txn.id,
+        "transferability_rule_id": rule.id,
+        "rofr_response_window_days": 0,
+    })
+    assert resp_zero.status_code == 400
+
+    resp_negative = client.post("/rofr-requests", headers=auth_headers(seller), json={
+        "transaction_id": txn.id,
+        "transferability_rule_id": rule.id,
+        "rofr_response_window_days": -5,
+    })
+    assert resp_negative.status_code == 400

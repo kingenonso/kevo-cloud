@@ -535,20 +535,30 @@ class RofrRequest(Base):
     """
     M25 (first slice) - Right of First Refusal, consent request + response
     log. Response deadlines are never invented: no jurisdiction sets a
-    statutory ROFR response window (confirmed by research 2026-09-25) -
-    it is always a company's own contractual term. TransferabilityRule.
-    rofr_response_window_days holds the real, sourced window for a
-    specific rule when one is known (entered directly, same as other
-    curated facts); response_due_date is computed from it at request
-    creation time and stays null when the window isn't known. Still
-    deliberately avoids
-    an auto-triggered countdown, the specific mechanism flagged as
-    patent-adjacent in kevo-m25-rofr-patent-claim-analysis.md
-    (Nasdaq Private Market US 12,572,980). KEVO has no "issuer" or
-    "existing shareholder" user concept yet, so this follows the same
-    self-submit/admin-verify pattern already used for Evidence, KYCFact,
-    and OwnershipRecord: the seller (who actually needs the consent)
-    submits the request; only an admin can record the real-world response.
+    statutory ROFR response window (confirmed by research 2026-09-25, and
+    re-confirmed by a dedicated 2026-10-25 legal research pass across
+    South Africa, Nigeria, and the UK, finding the same thing in every
+    jurisdiction checked - see kevo-milestone-reference.md's M25 entry) -
+    it is always a specific company's own contractual term, set in that
+    company's actual MOI/Articles/shareholders' agreement, never a
+    jurisdiction-wide fact. That means the real number, when anyone
+    actually has it, is a fact about THIS deal, not about the matched
+    TransferabilityRule (which many unrelated deals can share) - so as of
+    2026-10-25, rofr_response_window_days is entered per-request here,
+    not inherited from the rule. TransferabilityRule.rofr_response_window_days
+    still exists as a fallback for a rule where a real sourced window
+    happens to be known rule-wide (kept for backward compatibility; no
+    such rule exists yet), but the per-request value here, when given,
+    always wins. response_due_date is computed from whichever one supplied
+    a window at request creation time and stays null when neither did.
+    Still deliberately avoids an auto-triggered countdown, the specific
+    mechanism flagged as patent-adjacent in
+    kevo-m25-rofr-patent-claim-analysis.md (Nasdaq Private Market US
+    12,572,980). KEVO has no "issuer" or "existing shareholder" user
+    concept yet, so this follows the same self-submit/admin-verify pattern
+    already used for Evidence, KYCFact, and OwnershipRecord: the seller
+    (who actually needs the consent) submits the request; only an admin
+    can record the real-world response.
     """
     __tablename__ = "rofr_requests"
 
@@ -560,7 +570,8 @@ class RofrRequest(Base):
     escrow_release_initiated = Column(Boolean, nullable=False, default=False)
     responded_at = Column(DateTime, nullable=True)
     source_reference = Column(String(500), nullable=True)
-    response_due_date = Column(Date, nullable=True)  # M25: computed from the matched rule's rofr_response_window_days at creation time, when known
+    response_due_date = Column(Date, nullable=True)  # M25: computed at creation time from whichever window (this request's own, else the rule's) was known
+    rofr_response_window_days = Column(Integer, nullable=True)  # M25 (2026-10-25): real, sourced window for THIS specific deal, caller-supplied like agreed_price - never invented, never a jurisdiction default
 class PasswordResetToken(Base):
     """
     Full-gap-closure pass (Batch B, group 3 item 15), 2026-09-24 - the

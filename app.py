@@ -6264,14 +6264,25 @@ def get_deal_room(
 # ---------------------------------------------------------------------------
 # M25 (first slice) -- Right of First Refusal (ROFR): consent request + response log
 #
-# Deliberately NOT deadline-driven: no jurisdiction has a real, sourced ROFR
-# response-window on file. TransferabilityRule.hold_period_days means
-# something different (days held before sale is legally permitted, not days
-# to respond to a ROFR notice) and is empty for the one real ROFR rule that
-# exists (ZA-COMPANIES-S8-ROFR-CONSENT). Also deliberately avoids an
-# auto-triggered countdown -- the specific mechanism flagged as
-# patent-adjacent in kevo-m25-rofr-patent-claim-analysis.md
-# (Nasdaq Private Market US 12,572,980).
+# Deliberately NOT deadline-driven by default: no jurisdiction has a real,
+# statutory ROFR response-window (confirmed by dedicated research both on
+# 2026-09-25 and again, independently, on 2026-10-25 across South Africa,
+# Nigeria, and the UK -- every one of them leaves the actual window to that
+# specific company's own MOI/Articles/shareholders' agreement, never the
+# statute). TransferabilityRule.hold_period_days means something different
+# anyway (days held before sale is legally permitted, not days to respond
+# to a ROFR notice). Because the real window is always a fact about ONE
+# deal, not a jurisdiction, it's entered per-request (RofrRequestCreate.
+# rofr_response_window_days) as of 2026-10-25, the same caller-supplied
+# discipline as agreed_price -- never invented, never defaulted by KEVO,
+# only ever set when whoever is submitting actually has the real number
+# from that deal's own document. TransferabilityRule.rofr_response_window_days
+# still exists purely as a rule-wide fallback for the rare case a whole
+# rule genuinely shares one sourced window (none does yet). Also
+# deliberately avoids an auto-triggered countdown -- the specific
+# mechanism flagged as patent-adjacent in
+# kevo-m25-rofr-patent-claim-analysis.md (Nasdaq Private Market US
+# 12,572,980).
 #
 # KEVO has no "issuer" or "existing shareholder" user concept yet, so this
 # follows the same self-submit/admin-verify pattern already used for
@@ -6284,6 +6295,7 @@ class RofrRequestCreate(BaseModel):
     transaction_id: int
     transferability_rule_id: int
     source_reference: str | None = None
+    rofr_response_window_days: int | None = None  # M25 (2026-10-25): the real, sourced window for THIS deal's own MOI/shareholders' agreement, when the caller actually has it - never a jurisdiction default (see RofrRequest's docstring)
 
 
 @app.post("/rofr-requests")
@@ -6306,14 +6318,22 @@ def create_rofr_request(
     applicable_rules = find_applicable_transferability_rules(listing, db)
     if rule.id not in [r.id for r in applicable_rules]:
         raise HTTPException(status_code=400, detail="This transferability rule does not apply to this transaction's listing")
+    if payload.rofr_response_window_days is not None and payload.rofr_response_window_days <= 0:
+        raise HTTPException(status_code=400, detail="rofr_response_window_days must be positive")
+    # This deal's own window, when the caller has it, always wins over the
+    # matched rule's jurisdiction-wide one (which exists only as a fallback
+    # for the rare case a whole rule genuinely shares one real window across
+    # every deal it applies to - see RofrRequest's docstring).
+    window_days = payload.rofr_response_window_days if payload.rofr_response_window_days is not None else rule.rofr_response_window_days
     response_due_date = None
-    if rule.rofr_response_window_days is not None:
-        response_due_date = date.today() + timedelta(days=rule.rofr_response_window_days)
+    if window_days is not None:
+        response_due_date = date.today() + timedelta(days=window_days)
     rofr_request = RofrRequest(
         transaction_id=transaction.id,
         transferability_rule_id=rule.id,
         status="pending",
         source_reference=payload.source_reference,
+        rofr_response_window_days=window_days,
         response_due_date=response_due_date
     )
     db.add(rofr_request)
