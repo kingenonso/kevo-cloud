@@ -34,6 +34,8 @@ import { CostCalculatorPage } from "@/pages/CostCalculator"
 import { IssuerPortalPage } from "@/pages/IssuerPortal"
 import { PlatformAccessPage } from "@/pages/PlatformAccess"
 import { InsightsDashboardPage } from "@/pages/InsightsDashboard"
+import { RuleChangeAlertsPage } from "@/pages/RuleChangeAlerts"
+import { AuditLogPage } from "@/pages/AuditLog"
 
 export default function App() {
   return (
@@ -72,6 +74,8 @@ export default function App() {
         <Route path="/issuer-portal" element={<AppShell title="Issuer Portal"><IssuerPortalPage /></AppShell>} />
         <Route path="/admin/platform-access" element={<AppShell title="Platform Access"><PlatformAccessPage /></AppShell>} />
         <Route path="/insights-dashboard" element={<AppShell title="Insights Dashboard"><InsightsDashboardPage /></AppShell>} />
+        <Route path="/rule-change-alerts" element={<AppShell title="Rule-Change Alerts"><RuleChangeAlertsPage /></AppShell>} />
+        <Route path="/admin/audit-log" element={<AppShell title="Audit Log"><AuditLogPage /></AppShell>} />
       </Route>
     </Routes>
   )

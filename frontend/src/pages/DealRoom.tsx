@@ -1,7 +1,10 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, type FormEvent } from "react"
 import { useParams, Link } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { apiFetch } from "@/lib/auth"
+import { apiFetchQuery } from "@/lib/api"
 import { formatMoney } from "@/lib/format"
 import { useAuth } from "@/contexts/AuthContext"
 
@@ -40,6 +43,19 @@ type DealRoomData = {
   }
 }
 
+type ChecklistItem = {
+  id: number
+  transaction_id: number
+  description: string
+  status: "pending" | "complete" | "not_applicable"
+  evidence_id: number | null
+  created_by_user_id: number
+  completed_by_user_id: number | null
+  completed_at: string | null
+  source_reference: string | null
+  created_at: string
+}
+
 const STATUS_GREEN = new Set(["verified", "eligible", "clear", "known_complete"])
 const STATUS_RED = new Set(["blocked", "flagged", "known_incomplete", "rejected"])
 const STATUS_AMBER = new Set(["review", "pending", "required_but_unverified"])
@@ -75,6 +91,59 @@ export function DealRoomPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([])
+  const [checklistLoading, setChecklistLoading] = useState(true)
+  const [newItemDescription, setNewItemDescription] = useState("")
+  const [addItemError, setAddItemError] = useState<string | null>(null)
+  const [addItemSubmitting, setAddItemSubmitting] = useState(false)
+
+  async function loadChecklist() {
+    setChecklistLoading(true)
+    try {
+      const response = await apiFetch(`/transactions/${transactionId}/checklist-items`)
+      if (!response.ok) throw new Error()
+      setChecklistItems((await response.json()) as ChecklistItem[])
+    } catch {
+      // silent - the checklist section simply stays empty, same as other
+      // best-effort sub-sections on this page
+    } finally {
+      setChecklistLoading(false)
+    }
+  }
+
+  async function handleAddChecklistItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setAddItemError(null)
+    if (!newItemDescription.trim()) {
+      setAddItemError("Enter a description.")
+      return
+    }
+    setAddItemSubmitting(true)
+    try {
+      const response = await apiFetch(`/transactions/${transactionId}/checklist-items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: newItemDescription }),
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => null)
+        setAddItemError(body?.detail ?? "Could not add this checklist item.")
+        return
+      }
+      setNewItemDescription("")
+      await loadChecklist()
+    } catch {
+      setAddItemError("Could not reach the server.")
+    } finally {
+      setAddItemSubmitting(false)
+    }
+  }
+
+  async function handleChecklistStatusChange(itemId: number, status: ChecklistItem["status"]) {
+    const response = await apiFetchQuery(`/checklist-items/${itemId}`, "PUT", { status })
+    if (response.ok) await loadChecklist()
+  }
+
   useEffect(() => {
     let cancelled = false
     async function load() {
@@ -96,6 +165,7 @@ export function DealRoomPage() {
       }
     }
     load()
+    loadChecklist()
     return () => {
       cancelled = true
     }
@@ -219,6 +289,80 @@ export function DealRoomPage() {
                 <div className="text-muted-foreground">{doc.description || "-"}</div>
                 <div>
                   <StatusBadge status={doc.verification_status} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-3xl border border-border bg-card p-8 shadow-sm">
+        <p className="mb-4 text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+          Due-Diligence Checklist
+        </p>
+        <p className="mb-4 text-sm text-muted-foreground">
+          Organizational tracking only, not a verified fact — either party or an admin
+          can add or complete an item.
+        </p>
+
+        <form onSubmit={handleAddChecklistItem} className="mb-4 flex gap-3">
+          <Input
+            placeholder="New checklist item"
+            value={newItemDescription}
+            onChange={(e) => setNewItemDescription(e.target.value)}
+            className="flex-1"
+          />
+          <Button type="submit" size="sm" disabled={addItemSubmitting}>
+            {addItemSubmitting ? "Adding..." : "Add"}
+          </Button>
+        </form>
+        {addItemError && <p className="mb-4 text-sm text-destructive">{addItemError}</p>}
+
+        {checklistLoading ? (
+          <p className="text-sm text-muted-foreground">Loading...</p>
+        ) : checklistItems.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No checklist items yet.</p>
+        ) : (
+          <div className="divide-y divide-border">
+            {checklistItems.map((item) => (
+              <div key={item.id} className="flex items-center justify-between gap-4 py-3 text-sm">
+                <div>
+                  <p className="text-foreground">{item.description}</p>
+                  {item.source_reference && (
+                    <p className="text-xs text-muted-foreground">{item.source_reference}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <StatusBadge status={item.status} />
+                  {item.status !== "complete" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleChecklistStatusChange(item.id, "complete")}
+                    >
+                      Mark Complete
+                    </Button>
+                  )}
+                  {item.status !== "pending" && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-muted-foreground"
+                      onClick={() => handleChecklistStatusChange(item.id, "pending")}
+                    >
+                      Reset
+                    </Button>
+                  )}
+                  {item.status !== "not_applicable" && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-muted-foreground"
+                      onClick={() => handleChecklistStatusChange(item.id, "not_applicable")}
+                    >
+                      N/A
+                    </Button>
+                  )}
                 </div>
               </div>
             ))}

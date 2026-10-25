@@ -46,6 +46,20 @@ type LiquidityCommitment = {
   status: string
 }
 
+type AuctionBid = {
+  id: number
+  listing_id: number
+  bidder_id: number
+  quantity: number
+  bid_price: number
+  note: string | null
+  status: "submitted" | "accepted" | "rejected" | "withdrawn"
+  decided_at: string | null
+  decided_by_user_id: number | null
+  resulting_transaction_id: number | null
+  created_at: string
+}
+
 export function BrowsePage() {
   const { user } = useAuth()
 
@@ -73,6 +87,14 @@ export function BrowsePage() {
   const [cMaxPrice, setCMaxPrice] = useState("")
   const [commitError, setCommitError] = useState<string | null>(null)
 
+  const [bidsByListing, setBidsByListing] = useState<Record<number, AuctionBid[]>>({})
+  const [bidListing, setBidListing] = useState<Listing | null>(null)
+  const [bidQuantity, setBidQuantity] = useState("")
+  const [bidPrice, setBidPrice] = useState("")
+  const [bidNote, setBidNote] = useState("")
+  const [bidSubmitting, setBidSubmitting] = useState(false)
+  const [bidError, setBidError] = useState<string | null>(null)
+
   async function load() {
     setLoading(true)
     setError(null)
@@ -82,14 +104,40 @@ export function BrowsePage() {
         apiFetch("/buyer-interests"),
         apiFetch("/liquidity-commitments"),
       ])
-      if (listingsResp.ok) setListings((await listingsResp.json()) as Listing[])
+      let loadedListings: Listing[] = []
+      if (listingsResp.ok) {
+        loadedListings = (await listingsResp.json()) as Listing[]
+        setListings(loadedListings)
+      }
       if (interestsResp.ok) setInterests((await interestsResp.json()) as BuyerInterest[])
       if (commitmentsResp.ok) setCommitments((await commitmentsResp.json()) as LiquidityCommitment[])
+      await loadBids(loadedListings)
     } catch {
       setError("Could not load the marketplace.")
     } finally {
       setLoading(false)
     }
+  }
+
+  async function loadBids(forListings: Listing[]) {
+    // Sealed-bid design: as a non-seller this only ever returns the
+    // current user's own bid for each listing, never another buyer's -
+    // fetched per-listing (no aggregate "my bids" endpoint exists), fine
+    // at this prototype's scale. Skipped for listings the user owns,
+    // since sellers can't bid on their own listing.
+    const biddable = forListings.filter((l) => l.seller_id !== user?.id)
+    const results = await Promise.all(
+      biddable.map((l) =>
+        apiFetch(`/listings/${l.id}/auction-bids`)
+          .then((r) => (r.ok ? (r.json() as Promise<AuctionBid[]>) : []))
+          .catch(() => [] as AuctionBid[])
+      )
+    )
+    const map: Record<number, AuctionBid[]> = {}
+    biddable.forEach((l, i) => {
+      map[l.id] = results[i]
+    })
+    setBidsByListing(map)
   }
 
   useEffect(() => {
@@ -186,6 +234,50 @@ export function BrowsePage() {
     await load()
   }
 
+  async function handlePlaceBid(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setBidError(null)
+    if (!bidListing) return
+    const quantity = Number(bidQuantity)
+    const price = Number(bidPrice)
+    if (!quantity || quantity <= 0 || !price || price <= 0) {
+      setBidError("Enter a positive quantity and bid price.")
+      return
+    }
+    setBidSubmitting(true)
+    try {
+      const response = await apiFetch(`/listings/${bidListing.id}/auction-bids`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quantity, bid_price: price, note: bidNote || null }),
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => null)
+        setBidError(body?.detail ?? "Could not submit this bid.")
+        return
+      }
+      setBidListing(null)
+      setBidQuantity("")
+      setBidPrice("")
+      setBidNote("")
+      await load()
+    } catch {
+      setBidError("Could not reach the server.")
+    } finally {
+      setBidSubmitting(false)
+    }
+  }
+
+  async function handleWithdrawBid(bidId: number) {
+    setActionError(null)
+    const response = await apiFetchQuery(`/auction-bids/${bidId}/withdraw`, "PUT")
+    if (!response.ok) {
+      setActionError("Could not withdraw this bid.")
+      return
+    }
+    await load()
+  }
+
   const filteredListings = listings.filter(
     (l) => !search || l.company.toLowerCase().includes(search.toLowerCase())
   )
@@ -213,22 +305,45 @@ export function BrowsePage() {
           <p className="text-sm text-muted-foreground">No listings match.</p>
         ) : (
           <div className="divide-y divide-border">
-            <div className="grid grid-cols-5 gap-4 pb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="grid grid-cols-6 gap-4 pb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
               <div>Company</div>
               <div>Asset Type</div>
               <div>Quantity</div>
               <div>Asking Price</div>
               <div>Transferable</div>
+              <div>Auction Bid</div>
             </div>
-            {filteredListings.map((l) => (
-              <div key={l.id} className="grid grid-cols-5 items-center gap-4 py-3 text-sm">
-                <div className="font-medium text-foreground">{l.company}</div>
-                <div className="text-muted-foreground">{l.asset_type}</div>
-                <div className="text-muted-foreground">{l.quantity}</div>
-                <div className="text-foreground">{formatMoney(l.asking_price)}</div>
-                <div><StatusBadge status={l.is_transferable ? "known_complete" : "cannot_determine"} /></div>
-              </div>
-            ))}
+            {filteredListings.map((l) => {
+              const ownListing = l.seller_id === user?.id
+              const myBid = (bidsByListing[l.id] ?? [])[0]
+              return (
+                <div key={l.id} className="grid grid-cols-6 items-center gap-4 py-3 text-sm">
+                  <div className="font-medium text-foreground">{l.company}</div>
+                  <div className="text-muted-foreground">{l.asset_type}</div>
+                  <div className="text-muted-foreground">{l.quantity}</div>
+                  <div className="text-foreground">{formatMoney(l.asking_price)}</div>
+                  <div><StatusBadge status={l.is_transferable ? "known_complete" : "cannot_determine"} /></div>
+                  <div className="flex items-center gap-2">
+                    {ownListing ? (
+                      <span className="text-xs text-muted-foreground">Your listing</span>
+                    ) : myBid ? (
+                      <>
+                        <StatusBadge status={myBid.status} />
+                        {myBid.status === "submitted" && (
+                          <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => handleWithdrawBid(myBid.id)}>
+                            Withdraw
+                          </Button>
+                        )}
+                      </>
+                    ) : (
+                      <Button size="sm" variant="outline" onClick={() => setBidListing(l)}>
+                        Place Bid
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
           </div>
         )}
       </div>
@@ -367,6 +482,38 @@ export function BrowsePage() {
             </div>
             {commitError && <p className="text-sm text-destructive">{commitError}</p>}
             <DialogFooter><Button type="submit" className="w-full">Submit Commitment</Button></DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={bidListing !== null} onOpenChange={(open) => !open && setBidListing(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Place a sealed bid{bidListing ? ` on ${bidListing.company}` : ""}</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Your quantity and price are your own stated terms, never computed or suggested by
+            KEVO. Only the seller (and an admin) can see this bid — other bidders never can.
+          </p>
+          <form onSubmit={handlePlaceBid} className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">Quantity</label>
+                <Input type="number" min="1" value={bidQuantity} onChange={(e) => setBidQuantity(e.target.value)} required />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">Bid Price ($)</label>
+                <Input type="number" min="0" step="0.01" value={bidPrice} onChange={(e) => setBidPrice(e.target.value)} required />
+              </div>
+            </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground">Note (optional)</label>
+              <Input value={bidNote} onChange={(e) => setBidNote(e.target.value)} />
+            </div>
+            {bidError && <p className="text-sm text-destructive">{bidError}</p>}
+            <DialogFooter>
+              <Button type="submit" className="w-full" disabled={bidSubmitting}>
+                {bidSubmitting ? "Submitting..." : "Submit Bid"}
+              </Button>
+            </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>

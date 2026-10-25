@@ -9,8 +9,10 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { apiFetch } from "@/lib/auth"
+import { apiFetchQuery } from "@/lib/api"
 import { useAuth } from "@/contexts/AuthContext"
 import { formatMoney } from "@/lib/format"
+import { StatusBadge } from "@/components/shared/StatusBadge"
 
 type Listing = {
   id: number
@@ -23,6 +25,20 @@ type Listing = {
   issuer_current_information_available: boolean | null
   issuer_jurisdiction: string | null
   is_transferable: boolean
+}
+
+type AuctionBid = {
+  id: number
+  listing_id: number
+  bidder_id: number
+  quantity: number
+  bid_price: number
+  note: string | null
+  status: "submitted" | "accepted" | "rejected" | "withdrawn"
+  decided_at: string | null
+  decided_by_user_id: number | null
+  resulting_transaction_id: number | null
+  created_at: string
 }
 
 export function MyListingsPage() {
@@ -41,6 +57,10 @@ export function MyListingsPage() {
   const [createSubmitting, setCreateSubmitting] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
 
+  const [bidsByListing, setBidsByListing] = useState<Record<number, AuctionBid[]>>({})
+  const [expandedListingId, setExpandedListingId] = useState<number | null>(null)
+  const [bidActionError, setBidActionError] = useState<string | null>(null)
+
   async function loadListings() {
     setLoading(true)
     setError(null)
@@ -48,12 +68,55 @@ export function MyListingsPage() {
       const response = await apiFetch("/listings")
       if (!response.ok) throw new Error()
       const data = (await response.json()) as Listing[]
-      setListings(data.filter((listing) => listing.seller_id === user?.id))
+      const own = data.filter((listing) => listing.seller_id === user?.id)
+      setListings(own)
+      await loadBids(own)
     } catch {
       setError("Could not load your listings.")
     } finally {
       setLoading(false)
     }
+  }
+
+  async function loadBids(forListings: Listing[]) {
+    // As the seller, each of these GETs returns every bid on that
+    // listing, not just one bidder's own (sealed from other bidders,
+    // not from the seller) - fetched per-listing, same as Browse.tsx's
+    // buyer-side equivalent, fine at this prototype's scale.
+    const results = await Promise.all(
+      forListings.map((l) =>
+        apiFetch(`/listings/${l.id}/auction-bids`)
+          .then((r) => (r.ok ? (r.json() as Promise<AuctionBid[]>) : []))
+          .catch(() => [] as AuctionBid[])
+      )
+    )
+    const map: Record<number, AuctionBid[]> = {}
+    forListings.forEach((l, i) => {
+      map[l.id] = results[i]
+    })
+    setBidsByListing(map)
+  }
+
+  async function handleAcceptBid(bidId: number) {
+    setBidActionError(null)
+    const response = await apiFetchQuery(`/auction-bids/${bidId}/accept`, "PUT")
+    if (!response.ok) {
+      const body = await response.json().catch(() => null)
+      setBidActionError(body?.detail ?? "Could not accept this bid.")
+      return
+    }
+    await loadListings()
+  }
+
+  async function handleRejectBid(bidId: number) {
+    setBidActionError(null)
+    const response = await apiFetchQuery(`/auction-bids/${bidId}/reject`, "PUT")
+    if (!response.ok) {
+      const body = await response.json().catch(() => null)
+      setBidActionError(body?.detail ?? "Could not reject this bid.")
+      return
+    }
+    await loadListings()
   }
 
   useEffect(() => {
@@ -133,20 +196,69 @@ export function MyListingsPage() {
           </p>
         ) : (
           <div className="divide-y divide-border">
-            <div className="grid grid-cols-4 gap-4 pb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="grid grid-cols-5 gap-4 pb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
               <div>Company</div>
               <div>Asset Type</div>
               <div>Quantity</div>
               <div>Asking Price</div>
+              <div>Auction Bids</div>
             </div>
-            {listings.map((listing) => (
-              <div key={listing.id} className="grid grid-cols-4 gap-4 py-3 text-sm">
-                <div className="font-medium text-foreground">{listing.company}</div>
-                <div className="text-muted-foreground">{listing.asset_type}</div>
-                <div className="text-muted-foreground">{listing.quantity}</div>
-                <div className="text-foreground">{formatMoney(listing.asking_price)}</div>
-              </div>
-            ))}
+            {bidActionError && <p className="text-sm text-destructive">{bidActionError}</p>}
+            {listings.map((listing) => {
+              const bids = bidsByListing[listing.id] ?? []
+              const pendingCount = bids.filter((b) => b.status === "submitted").length
+              const expanded = expandedListingId === listing.id
+              return (
+                <div key={listing.id}>
+                  <div className="grid grid-cols-5 items-center gap-4 py-3 text-sm">
+                    <div className="font-medium text-foreground">{listing.company}</div>
+                    <div className="text-muted-foreground">{listing.asset_type}</div>
+                    <div className="text-muted-foreground">{listing.quantity}</div>
+                    <div className="text-foreground">{formatMoney(listing.asking_price)}</div>
+                    <div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setExpandedListingId(expanded ? null : listing.id)}
+                      >
+                        {bids.length === 0
+                          ? "No bids"
+                          : `${bids.length} bid${bids.length === 1 ? "" : "s"}${pendingCount > 0 ? ` (${pendingCount} open)` : ""}`}
+                      </Button>
+                    </div>
+                  </div>
+                  {expanded && (
+                    <div className="mb-3 rounded-xl border border-border bg-muted/30 p-4">
+                      {bids.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No bids on this listing yet.</p>
+                      ) : (
+                        <div className="divide-y divide-border">
+                          {bids.map((bid) => (
+                            <div key={bid.id} className="flex items-center justify-between gap-4 py-2 text-sm">
+                              <div>
+                                <p className="text-foreground">
+                                  {bid.quantity} units @ {formatMoney(bid.bid_price)}
+                                </p>
+                                {bid.note && <p className="text-xs text-muted-foreground">{bid.note}</p>}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <StatusBadge status={bid.status} />
+                                {bid.status === "submitted" && (
+                                  <>
+                                    <Button size="sm" onClick={() => handleAcceptBid(bid.id)}>Accept</Button>
+                                    <Button size="sm" variant="outline" onClick={() => handleRejectBid(bid.id)}>Reject</Button>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         )}
       </div>

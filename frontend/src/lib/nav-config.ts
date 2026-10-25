@@ -95,6 +95,7 @@ export const groupedNav: NavGroup[] = [
     icon: Zap,
     items: [
       { label: "Deal Alerts", href: "/deal-alerts" },
+      { label: "Rule-Change Alerts", href: "/rule-change-alerts" },
       { label: "Risk Radar", href: "/risk-radar" },
       { label: "Liquidity Roadmap", href: "/liquidity-roadmap" },
       { label: "Market Intelligence", href: "/market-intelligence" },
@@ -110,6 +111,7 @@ export const groupedNav: NavGroup[] = [
     icon: KeyRound,
     items: [
       { label: "API & Insights Access", href: "/admin/platform-access" },
+      { label: "Audit Log", href: "/admin/audit-log" },
     ],
   },
 ]
