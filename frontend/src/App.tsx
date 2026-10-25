@@ -29,6 +29,7 @@ import { SpeedDiscountPage } from "@/pages/SpeedDiscount"
 import { SpvPoolsPage } from "@/pages/SpvPools"
 import { ForwardSaleContractsPage } from "@/pages/ForwardSaleContracts"
 import { SellerFinancingPage } from "@/pages/SellerFinancing"
+import { SettlementPage } from "@/pages/Settlement"
 import { BrowsePage } from "@/pages/Browse"
 import { CostCalculatorPage } from "@/pages/CostCalculator"
 import { IssuerPortalPage } from "@/pages/IssuerPortal"
@@ -56,6 +57,7 @@ export default function App() {
         <Route path="/spv-pools" element={<AppShell title="SPV Pools"><SpvPoolsPage /></AppShell>} />
         <Route path="/forward-sale-contracts" element={<AppShell title="Forward Sale Contracts"><ForwardSaleContractsPage /></AppShell>} />
         <Route path="/seller-financing" element={<AppShell title="Seller Financing"><SellerFinancingPage /></AppShell>} />
+        <Route path="/settlement" element={<AppShell title="Settlement"><SettlementPage /></AppShell>} />
         <Route path="/compliance-ledger" element={<AppShell title="Compliance Ledger"><ComplianceLedgerPage /></AppShell>} />
         <Route path="/kyc" element={<AppShell title="KYC & AML"><KycPage /></AppShell>} />
         <Route path="/rofr" element={<AppShell title="ROFR"><RofrPage /></AppShell>} />

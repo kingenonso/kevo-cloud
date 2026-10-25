@@ -64,6 +64,7 @@ export const groupedNav: NavGroup[] = [
       { label: "SPV Pools", href: "/spv-pools" },
       { label: "Forward Sale Contracts", href: "/forward-sale-contracts" },
       { label: "Seller Financing", href: "/seller-financing" },
+      { label: "Settlement", href: "/settlement" },
     ],
   },
   {
