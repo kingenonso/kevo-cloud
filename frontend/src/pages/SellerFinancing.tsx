@@ -14,7 +14,14 @@ import { useAuth } from "@/contexts/AuthContext"
 import { formatMoney } from "@/lib/format"
 import { StatusBadge } from "@/components/shared/StatusBadge"
 
-type Transaction = { id: number; buyer_id: number; seller_id: number; status: string }
+type Transaction = {
+  id: number
+  buyer_id: number
+  seller_id: number
+  status: string
+  quantity: number
+  listing_id: number
+}
 
 type Agreement = {
   id: number
@@ -25,6 +32,19 @@ type Agreement = {
   payment_frequency: string
   status: string
   restricts_transfer_until_paid: boolean
+  quantity_transferred: number
+}
+
+type PositionEvent = {
+  id: number
+  event_type: string
+  effective_date: string | null
+  source: string
+  submitting_party: string | null
+  verification_status: string
+  quantity_before: number | null
+  quantity_after: number | null
+  notes: string | null
 }
 
 type Payment = {
@@ -62,6 +82,8 @@ export function SellerFinancingPage() {
   const [expanded, setExpanded] = useState<number | null>(null)
   const [payments, setPayments] = useState<Record<number, Payment[]>>({})
   const [summaries, setSummaries] = useState<Record<number, Summary>>({})
+  const [transactionsById, setTransactionsById] = useState<Record<number, Transaction>>({})
+  const [transferEvents, setTransferEvents] = useState<Record<number, PositionEvent[]>>({})
 
   const [createOpen, setCreateOpen] = useState(false)
   const [transactionId, setTransactionId] = useState("")
@@ -86,6 +108,11 @@ export function SellerFinancingPage() {
       if (txResp.ok) {
         const txs = (await txResp.json()) as Transaction[]
         setMyTransactions(txs.filter((t) => t.seller_id === user.id))
+        const byId: Record<number, Transaction> = {}
+        txs.forEach((t) => {
+          byId[t.id] = t
+        })
+        setTransactionsById(byId)
       }
     } catch {
       setError("Could not load seller financing agreements.")
@@ -111,6 +138,28 @@ export function SellerFinancingPage() {
     if (summaryResp.ok) {
       const s = (await summaryResp.json()) as Summary
       setSummaries((prev) => ({ ...prev, [agreementId]: s }))
+    }
+
+    // The proportional-transfer trail behind quantity_transferred isn't a
+    // seller-financing-specific table - it's KEVO's existing, listing-wide
+    // PositionEvent history (M14), filtered here to just the events this
+    // agreement's own payment confirmations created.
+    const agreement = agreements.find((a) => a.id === agreementId)
+    const transaction = agreement ? transactionsById[agreement.transaction_id] : undefined
+    if (transaction) {
+      try {
+        const response = await apiFetch(`/position-events/listing/${transaction.listing_id}`)
+        if (response.ok) {
+          const body = (await response.json()) as { events: PositionEvent[] }
+          setTransferEvents((prev) => ({
+            ...prev,
+            [agreementId]: body.events.filter((e) => e.source === "seller_financing_payment_confirmation"),
+          }))
+        }
+      } catch {
+        // silent - the transfer-history section simply stays empty, same
+        // best-effort convention as the rest of this page's sub-sections
+      }
     }
   }
 
@@ -338,6 +387,48 @@ export function SellerFinancingPage() {
                         <div><p className="text-muted-foreground">Total Paid</p><p className="font-mono text-foreground">{formatMoney(summaries[a.id].total_paid)}</p></div>
                         <div><p className="text-muted-foreground">Overdue</p><p className="font-mono text-foreground">{summaries[a.id].payments_overdue}</p></div>
                         <div><p className="text-muted-foreground">Next Due</p><p className="font-mono text-foreground">{summaries[a.id].next_payment_due_date ?? "-"}</p></div>
+                      </div>
+                    )}
+
+                    {transactionsById[a.transaction_id] && (
+                      <div>
+                        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                          Transfer Progress
+                        </p>
+                        <div className="mb-1 flex items-center justify-between text-xs">
+                          <span className="text-foreground">
+                            {a.quantity_transferred} of {transactionsById[a.transaction_id].quantity} units transferred to the buyer
+                          </span>
+                          <span className="text-muted-foreground">
+                            {Math.round((a.quantity_transferred / transactionsById[a.transaction_id].quantity) * 100)}%
+                          </span>
+                        </div>
+                        <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                          <div
+                            className="h-full rounded-full bg-primary"
+                            style={{
+                              width: `${Math.min(100, (a.quantity_transferred / transactionsById[a.transaction_id].quantity) * 100)}%`,
+                            }}
+                          />
+                        </div>
+                        {a.status === "defaulted" && (
+                          <p className="mt-1.5 text-xs text-muted-foreground">
+                            Transfer is frozen exactly where it stands — a default stops any further
+                            proportional transfer until the agreement is resolved.
+                          </p>
+                        )}
+                        {(transferEvents[a.id] ?? []).length > 0 && (
+                          <div className="mt-3 space-y-1">
+                            {(transferEvents[a.id] ?? []).map((e) => (
+                              <div key={e.id} className="flex items-center justify-between py-1 text-xs">
+                                <span className="text-muted-foreground">
+                                  {e.effective_date ? new Date(e.effective_date).toLocaleDateString() : "-"} — {e.notes ?? "Proportional transfer"}
+                                </span>
+                                <StatusBadge status={e.verification_status} />
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
 
