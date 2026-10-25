@@ -40,6 +40,20 @@ type ConnectStatus = {
   payoutsEnabled: boolean
 }
 
+type LedgerEntry = {
+  id: number
+  ledgerTransactionId: number
+  direction: "CREDIT" | "DEBIT"
+  bucket: string
+  entryType: string
+  amount: number
+  currency: string
+  description: string
+  relatedMarketplaceTransactionId: number | null
+  reversesEntryId: number | null
+  createdAt: string
+}
+
 function newIdempotencyKey(): string {
   return crypto.randomUUID()
 }
@@ -65,6 +79,10 @@ export function WalletPage() {
 
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([])
   const [bankAccountsLoading, setBankAccountsLoading] = useState(true)
+
+  const [activity, setActivity] = useState<LedgerEntry[]>([])
+  const [activityLoading, setActivityLoading] = useState(true)
+  const [activityError, setActivityError] = useState<string | null>(null)
 
   const [depositOpen, setDepositOpen] = useState(false)
   const [depositMethod, setDepositMethod] = useState<"demo" | "real">("demo")
@@ -124,6 +142,21 @@ export function WalletPage() {
       // silent - the bank accounts section simply stays empty
     } finally {
       setBankAccountsLoading(false)
+    }
+  }
+
+  async function loadActivity() {
+    setActivityLoading(true)
+    setActivityError(null)
+    try {
+      const response = await apiFetch("/me/funds/activity?limit=25&offset=0")
+      if (!response.ok) throw new Error()
+      const data = (await response.json()) as LedgerEntry[]
+      setActivity(data)
+    } catch {
+      setActivityError("Could not load your transaction activity.")
+    } finally {
+      setActivityLoading(false)
     }
   }
 
@@ -194,6 +227,7 @@ export function WalletPage() {
     loadWallet()
     loadBankAccounts()
     loadConnectStatus()
+    loadActivity()
   }, [])
 
   async function handleDeposit(event: FormEvent<HTMLFormElement>) {
@@ -491,6 +525,48 @@ export function WalletPage() {
                     </Button>
                   )}
                 </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-3xl border border-border bg-card p-8 shadow-sm">
+        <div className="mb-6 flex items-center justify-between">
+          <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            Activity
+          </p>
+        </div>
+
+        {activityLoading ? (
+          <p className="text-sm text-muted-foreground">Loading...</p>
+        ) : activityError ? (
+          <p className="text-sm text-destructive">{activityError}</p>
+        ) : activity.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No activity yet. Deposits and withdrawals will show up here.
+          </p>
+        ) : (
+          <div className="divide-y divide-border">
+            {activity.map((entry) => (
+              <div key={entry.id} className="flex items-center justify-between py-3">
+                <div>
+                  <p className="text-sm font-medium text-foreground">
+                    {capitalizeStatus(entry.entryType)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {entry.description} · {new Date(entry.createdAt).toLocaleString()}
+                  </p>
+                </div>
+                <p
+                  className={
+                    "text-sm font-medium tabular-nums " +
+                    (entry.direction === "CREDIT" ? "text-primary" : "text-foreground")
+                  }
+                >
+                  {entry.direction === "CREDIT" ? "+" : "-"}
+                  {formatMoney(entry.amount, entry.currency)}
+                </p>
               </div>
             ))}
           </div>

@@ -1959,6 +1959,22 @@ def get_my_funds(
         raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
 
 
+@app.get("/me/funds/activity")
+def get_my_funds_activity(
+    limit: int = 50,
+    offset: int = 0,
+    current_user: UserModel = Depends(get_current_user)
+):
+    """Itemized ledger history behind the /me/funds balance - a bank-app-style
+    transaction/activity list (most recent first). Backed by
+    kevo-wallet-service's double-entry ledger (M32); this endpoint adds no
+    business logic of its own, just pass-through pagination."""
+    try:
+        return wallet_client.get_ledger_entries(current_user.id, limit, offset)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=f"Wallet service unavailable: {e}")
+
+
 @app.post("/me/funds/deposit")
 def deposit_to_my_wallet(
     request: WalletDepositRequest,

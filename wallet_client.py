@@ -66,6 +66,18 @@ def get_wallet(kevo_user_id: int) -> dict:
     return response.json()
 
 
+def get_ledger_entries(kevo_user_id: int, limit: int = 50, offset: int = 0) -> list:
+    """Fetches a KEVO user's itemized ledger history (most recent first) - the
+    double-entry postings underlying their wallet balance, e.g. for a
+    bank-app-style activity/transaction list. limit/offset page through it;
+    the wallet service applies its own defaults (50/0) if omitted."""
+    response = _check(requests.get(
+        f"{_base_url()}/internal/wallets/{kevo_user_id}/ledger-entries",
+        params={"limit": limit, "offset": offset}, headers=_headers(), timeout=15
+    ))
+    return response.json()
+
+
 def deposit(kevo_user_id: int, amount: float, currency: str, idempotency_key: str) -> dict:
     """Funds a user's wallet."""
     payload = {"amount": amount, "currency": currency, "idempotencyKey": idempotency_key}
