@@ -444,6 +444,8 @@ def _check_buyer_communication_eligible(buyer, listing, db):
     """
     if buyer.kyc_status != "verified":
         return False, "buyer KYC is not verified"
+    if not kyc_is_current(buyer):
+        return False, "buyer KYC has gone stale and needs to be redone"
 
     applicable_rules = find_applicable_rules(buyer, listing, db)
 
@@ -491,6 +493,13 @@ def assess_compliance(buyer, listing, db):
         return {
             "status": "blocked",
             "explanation": "Buyer KYC is not verified.",
+            "applicable_rule_codes": []
+        }
+
+    if not kyc_is_current(buyer):
+        return {
+            "status": "blocked",
+            "explanation": "Buyer KYC has gone stale and needs to be redone.",
             "applicable_rule_codes": []
         }
 
@@ -911,6 +920,55 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     return user
 
 
+# KYC re-verification windows (added 2026-10-26). No regulator - not
+# FinCEN, not the FCA, not FATF - sets a fixed KYC re-verification period.
+# It's an explicit risk-based judgment call, left to the regulated firm
+# (FinCEN FAQ: "there is no categorical requirement...to update customer
+# information"). The numbers below are a commonly-cited INDUSTRY-PRACTICE
+# convention, not a legal mandate - confirm with KEVO's actual compliance
+# counsel before relying on them for a real launch. Sanctions/watchlist
+# screening is a separate, continuous-monitoring concern in this codebase
+# and is deliberately NOT governed by this expiry window.
+KYC_REVERIFICATION_WINDOW_DAYS = {
+    "high": 365,     # ~12 months
+    "medium": 730,   # ~24 months (industry range cited: 24-36 months)
+    "low": 1095,     # ~36 months (industry range cited: 36-60 months)
+}
+# User.kyc_risk_tier is admin-assigned. Once an account has a
+# kyc_verified_at timestamp but no risk tier on file, KEVO defaults to
+# the strictest ("high") window rather than assuming a lower-risk
+# customer.
+DEFAULT_KYC_RISK_TIER = "high"
+
+
+def kyc_is_current(user: UserModel) -> bool:
+    """
+    True if `user`'s KYC verification is still inside its re-verification
+    window. This does NOT check kyc_status itself - callers must still do
+    that separately (this only answers "is it stale", not "is it set").
+
+    kyc_verified_at being unset means staleness simply isn't being
+    tracked for this account - same posture as
+    ComplianceRule.fact_validity_days being null (M20/M21's own existing
+    pattern: no recorded validity window means no expiry is enforced,
+    not an automatic fail). This matters in practice: every account
+    verified before this feature existed has no kyc_verified_at, and
+    they should not all be retroactively locked out the moment this
+    ships. update_kyc_status() stamps kyc_verified_at on every verification
+    going forward, so real enforcement phases in naturally as accounts
+    get (re)verified; a deliberate backfill can bring existing verified
+    accounts under the same window sooner if KEVO wants that.
+    """
+    if user.kyc_verified_at is None:
+        return True
+    tier = user.kyc_risk_tier or DEFAULT_KYC_RISK_TIER
+    window_days = KYC_REVERIFICATION_WINDOW_DAYS.get(
+        tier, KYC_REVERIFICATION_WINDOW_DAYS[DEFAULT_KYC_RISK_TIER]
+    )
+    expires_on = user.kyc_verified_at + timedelta(days=window_days)
+    return datetime.utcnow() < expires_on
+
+
 def require_verified_user(current_user: UserModel = Depends(get_current_user)) -> UserModel:
     """
     Gate for actions that move money or create real financial/securities
@@ -924,11 +982,17 @@ def require_verified_user(current_user: UserModel = Depends(get_current_user)) -
     admin exemption added after finding /rofr-requests allows either the
     seller or an admin to submit it).
     """
-    if current_user.account_type != "admin" and current_user.kyc_status != "verified":
-        raise HTTPException(
-            status_code=403,
-            detail="Complete KYC verification before performing this action"
-        )
+    if current_user.account_type != "admin":
+        if current_user.kyc_status != "verified":
+            raise HTTPException(
+                status_code=403,
+                detail="Complete KYC verification before performing this action"
+            )
+        if not kyc_is_current(current_user):
+            raise HTTPException(
+                status_code=403,
+                detail="Your KYC verification has expired and needs to be redone before performing this action"
+            )
     return current_user
 
 
@@ -2497,6 +2561,7 @@ def reject_withdrawal_after_review(
 def update_kyc_status(
     user_id: int,
     status: str,
+    risk_tier: str = None,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user)
 ):
@@ -2522,6 +2587,18 @@ def update_kyc_status(
             detail="Status must be verified or rejected"
         )
 
+    # risk_tier drives the KYC re-verification window (see
+    # KYC_REVERIFICATION_WINDOW_DAYS / kyc_is_current above) - optional,
+    # admin-supplied, never inferred or defaulted by KEVO itself. Passing
+    # it is how an admin records the real risk-based judgment call KEVO
+    # cannot make on its own; omitting it on a later call leaves whatever
+    # tier is already on file untouched.
+    if risk_tier is not None and risk_tier not in KYC_REVERIFICATION_WINDOW_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"risk_tier must be one of {sorted(KYC_REVERIFICATION_WINDOW_DAYS.keys())}"
+        )
+
     old_status = user.kyc_status
     user.kyc_status = status
     # Roles are fully derived from KYC status, not chosen separately - a
@@ -2530,6 +2607,18 @@ def update_kyc_status(
     # the real buyer/seller distinction has always lived per-transaction,
     # not on the account, so a separate role choice added no protection).
     user.roles = ["seller", "buyer"] if status == "verified" else []
+
+    # KYC staleness clock (2026-10-26): starts fresh every time an admin
+    # actually verifies this account, and clears the moment it stops
+    # being verified - a rejected/unverified account has no "verified
+    # as of" date to be stale or current about.
+    if status == "verified":
+        user.kyc_verified_at = datetime.utcnow()
+    else:
+        user.kyc_verified_at = None
+
+    if risk_tier is not None:
+        user.kyc_risk_tier = risk_tier
 
     log_audit_event(db, current_user.id, "kyc_status_changed", target_type="user", target_id=user.id, detail=f"{old_status} -> {status}")
     db.commit()
@@ -2540,7 +2629,9 @@ def update_kyc_status(
         "user": {
             "id": user.id,
             "roles": user.roles,
-            "kyc_status": user.kyc_status
+            "kyc_status": user.kyc_status,
+            "kyc_verified_at": user.kyc_verified_at.isoformat() if user.kyc_verified_at else None,
+            "kyc_risk_tier": user.kyc_risk_tier
         }
     }
 

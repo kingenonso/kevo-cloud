@@ -23,6 +23,25 @@ class User(Base):
     # array-specific operators, which nothing in this codebase uses on `roles`.
     roles = Column(ARRAY(String(50)).with_variant(JSON(), "sqlite"), nullable=False, default=lambda: ["seller"])
     kyc_status = Column(String(50), nullable=False, default="not_started")
+    # KYC staleness (2026-10-26): no regulator - not FinCEN, not the FCA,
+    # not FATF - sets a fixed KYC re-verification period; it's an
+    # explicit risk-based judgment call, not a numeric mandate (FinCEN
+    # FAQ: "there is no categorical requirement...to update customer
+    # information"). These two fields support an INDUSTRY-PRACTICE
+    # convention, not a legal one - see KYC_REVERIFICATION_WINDOW_DAYS /
+    # kyc_is_current() in app.py. kyc_verified_at is set/cleared by
+    # update_kyc_status() whenever kyc_status flips to/from "verified";
+    # null means staleness isn't tracked for this account yet (same
+    # opt-in posture as ComplianceRule.fact_validity_days being null),
+    # not an automatic fail - real enforcement phases in as accounts get
+    # (re)verified under this field, or sooner via a deliberate backfill.
+    # kyc_risk_tier is admin-assigned ("high"/"medium"/"low"); null
+    # (once kyc_verified_at IS set) falls back to the strictest tier
+    # rather than assuming a lower-risk customer. Distinct from
+    # sanctions/watchlist screening, which this codebase treats as
+    # continuous monitoring, not an expiry window.
+    kyc_verified_at = Column(DateTime, nullable=True)
+    kyc_risk_tier = Column(String(20), nullable=True)
     jurisdiction = Column(String(100), nullable=True)
     seller_affiliate_status = Column(String(50), nullable=True)
     hashed_password = Column(String(255), nullable=True)
