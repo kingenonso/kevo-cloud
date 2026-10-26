@@ -48,6 +48,24 @@ app = FastAPI(title="KEVO API")
 # html=True lets /app/ resolve to static_v2/index.html automatically.
 app.mount("/app", StaticFiles(directory="static_v2", html=True), name="frontend")
 
+# CORS (2026-10-26): no fastapi.middleware.cors.CORSMiddleware is added
+# anywhere in this app, deliberately, not because it was never decided.
+# Checked directly: nothing in frontend/src makes a cross-origin fetch -
+# it only ever calls this same backend, same-origin (confirmed above, and
+# the vite dev server proxies non-/app requests server-side too, so the
+# browser never talks to a different origin even in local dev). The
+# M33B/M33C partner API (get_api_client() below) authenticates with a
+# secret X-API-Key header - a pattern that should never be called from
+# browser JavaScript in the first place (any page JS or network tab would
+# expose the key to its caller), so enabling CORS for it would invite the
+# wrong usage pattern rather than fix a real gap. With no CORSMiddleware
+# registered, a browser blocks any cross-origin request by default - that
+# default is the actual desired behavior here, not an oversight. If a
+# real third-party partner ever needs their own browser-side frontend to
+# call this API directly, that's a real, scoped exception to add then
+# (specific allowed origin(s), named here) - not a blanket policy for
+# clients that don't exist yet.
+
 # M27 (first slice) - Hash-Chained Compliance Decision Ledger helpers.
 # GENESIS_HASH is the fixed starting point of the one global chain -
 # standard convention (all zeros) for a hash chain's first link.
