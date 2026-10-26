@@ -56,6 +56,28 @@ type ChecklistItem = {
   created_at: string
 }
 
+type DependencyStepState = {
+  complete: boolean
+  determinability: string
+  reasons: string
+}
+
+type DependencyChangedStep = {
+  step_type: string
+  sequence_position: number
+  previous: DependencyStepState
+  current: DependencyStepState
+  downstream_steps_affected: Array<{ step_type: string; sequence_position: number }>
+}
+
+type DependencyChangesResult = {
+  transaction_id: number
+  previous_run_id: string | null
+  new_run_id: string
+  message?: string
+  changed_steps: DependencyChangedStep[]
+}
+
 const STATUS_GREEN = new Set(["verified", "eligible", "clear", "known_complete"])
 const STATUS_RED = new Set(["blocked", "flagged", "known_incomplete", "rejected"])
 const STATUS_AMBER = new Set(["review", "pending", "required_but_unverified"])
@@ -142,6 +164,24 @@ export function DealRoomPage() {
   async function handleChecklistStatusChange(itemId: number, status: ChecklistItem["status"]) {
     const response = await apiFetchQuery(`/checklist-items/${itemId}`, "PUT", { status })
     if (response.ok) await loadChecklist()
+  }
+
+  const [dependencyResult, setDependencyResult] = useState<DependencyChangesResult | null>(null)
+  const [dependencyLoading, setDependencyLoading] = useState(false)
+  const [dependencyError, setDependencyError] = useState<string | null>(null)
+
+  async function handleCheckDependencyChanges() {
+    setDependencyLoading(true)
+    setDependencyError(null)
+    try {
+      const response = await apiFetch(`/transactions/${transactionId}/dependency-changes`)
+      if (!response.ok) throw new Error()
+      setDependencyResult((await response.json()) as DependencyChangesResult)
+    } catch {
+      setDependencyError("Could not check for dependency changes.")
+    } finally {
+      setDependencyLoading(false)
+    }
   }
 
   useEffect(() => {
@@ -435,6 +475,71 @@ export function DealRoomPage() {
             </div>
           ))}
         </div>
+      </div>
+
+      <div className="rounded-3xl border border-border bg-card p-8 shadow-sm">
+        <p className="mb-2 text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+          Dependency Impact Check
+        </p>
+        <p className="mb-4 text-sm text-muted-foreground">
+          Compares this transaction's liquidity-path steps against the last time this was
+          checked, and shows exactly which downstream steps are affected by anything that
+          changed. Each check records a fresh snapshot, so this runs only when you ask for
+          it, never automatically.
+        </p>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={handleCheckDependencyChanges}
+          disabled={dependencyLoading}
+        >
+          {dependencyLoading ? "Checking..." : "Check for Changes"}
+        </Button>
+        {dependencyError && <p className="mt-4 text-sm text-destructive">{dependencyError}</p>}
+        {dependencyResult && (
+          <div className="mt-6">
+            {dependencyResult.message ? (
+              <p className="text-sm text-muted-foreground">{dependencyResult.message}</p>
+            ) : dependencyResult.changed_steps.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No changes since the last check.</p>
+            ) : (
+              <div className="space-y-4">
+                {dependencyResult.changed_steps.map((step) => (
+                  <div key={step.step_type} className="rounded-xl border border-border p-4 text-sm">
+                    <p className="mb-2 font-medium text-foreground">{formatLabel(step.step_type)}</p>
+                    <div className="grid grid-cols-2 gap-4 text-xs">
+                      <div>
+                        <p className="mb-1 text-muted-foreground">Was</p>
+                        <StatusBadge status={step.previous.determinability} />
+                        <p className="mt-1 text-muted-foreground">{step.previous.reasons}</p>
+                      </div>
+                      <div>
+                        <p className="mb-1 text-muted-foreground">Now</p>
+                        <StatusBadge status={step.current.determinability} />
+                        <p className="mt-1 text-muted-foreground">{step.current.reasons}</p>
+                      </div>
+                    </div>
+                    {step.downstream_steps_affected.length > 0 && (
+                      <div className="mt-3 border-t border-border pt-3">
+                        <p className="mb-2 text-xs text-muted-foreground">Downstream steps affected</p>
+                        <div className="flex flex-wrap gap-2">
+                          {step.downstream_steps_affected.map((d) => (
+                            <span
+                              key={d.step_type}
+                              className="rounded-full border border-border px-3 py-1 text-xs text-foreground"
+                            >
+                              {formatLabel(d.step_type)}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
